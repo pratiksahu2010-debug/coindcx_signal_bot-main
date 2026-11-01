@@ -74,7 +74,8 @@ class SignalEngine:
         self.last_scan_time: Optional[datetime] = None
         self.telegram = None
         self.scan_errors = {"normal": 0, "momentum": 0}
-        self._last_processed = {}
+        # Independent candle cursors prevent one strategy engine suppressing the other.
+        self._last_processed = {"normal": {}, "momentum": {}}
 
     def set_telegram(self, tg) -> None:
         self.telegram = tg
@@ -175,7 +176,7 @@ class SignalEngine:
         # Update active signal outcomes on every fresh closed candle before deciding
         # whether this engine has already evaluated the candle.
         self._update_signal_outcomes(pair, engine, float(high[-1]), float(low[-1]))
-        if self._last_processed.get(candle_key) == candle_ts:
+        if self._last_processed.setdefault(engine, {}).get(pair) == candle_ts:
             return
 
         # Indicators
@@ -285,6 +286,12 @@ class SignalEngine:
 
         if not direction:
             return
+        indicators["macd_direction_ok"] = bool(
+            macd_hist is not None and (
+                (direction == "LONG" and macd_hist > 0) or
+                (direction == "SHORT" and macd_hist < 0)
+            )
+        )
         indicators["confirm_15m"] = confirm_long if direction == "LONG" else confirm_short
         indicators["structure_direction_ok"] = bool(
             (direction == "LONG" and close[-1] > (resistance or float("inf"))) or
@@ -404,6 +411,7 @@ class SignalEngine:
             "indicators": {k: (round(v, 4) if isinstance(v, float) else v) for k, v in indicators.items() if v is not None},
             "components": [{"name": c.name, "points": c.points, "max": c.max_points, "expl": c.explanation} for c in result.components],
             "timestamp": utc_iso(utc_now()),
+            "candle_time_ms": candle_ts,
         }
         if risk:
             signal["risk"] = {
@@ -419,18 +427,30 @@ class SignalEngine:
             }
 
         if result.total >= max(7.0, settings.signal_threshold):
+            self._last_processed.setdefault(engine, {})[pair] = candle_ts
             if self.signals.add(signal):
-                self._last_processed[candle_key] = candle_ts
+                # Durable claim blocks duplicate alerts after a Render restart or
+                # a second worker sharing the same database.
+                try:
+                    from database.repositories import claim_signal_once
+                    claimed = await claim_signal_once(signal, candle_ts, ttl_hours=4)
+                except Exception as exc:
+                    logger.error(f"Persistent signal deduplication unavailable: {exc}")
+                    claimed = False
+                if not claimed:
+                    self.signals.invalidate(pair, engine, direction)
+                    logger.warning(f"Signal suppressed: persistent duplicate/claim unavailable for {pair} {engine} {direction}")
+                    return
                 self.cooldowns.set(pair, engine, direction)
                 logger.info(f"SIGNAL {result.grade} {direction} {pair} score={result.total} engine={engine} strategy={strategy}")
-                # Push to Telegram
+                # Push to Telegram only after durable claim succeeds.
                 if self.telegram:
                     try:
                         await self.telegram.send_signal(signal)
                     except Exception as e:
                         logger.error(f"Telegram send error: {e}")
         elif result.total >= 6.0:
-            self._last_processed[candle_key] = candle_ts
+            self._last_processed.setdefault(engine, {})[pair] = candle_ts
             self.watchlist.add(signal)
             logger.info(f"WATCHLIST {direction} {pair} score={result.total}")
 
