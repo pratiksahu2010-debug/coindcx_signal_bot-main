@@ -342,3 +342,27 @@ def test_stale_market_quarantine_requires_repeated_or_both_timeframes():
     manager.rest.stale["B-ONE_USDT"]["5m"] = 2
     manager._refresh_quarantine_from_rest()
     assert "B-ONE_USDT" in manager._quarantined
+
+
+def test_rest_client_rejects_future_open_candles(monkeypatch):
+    import asyncio
+    from exchange.coindcx_rest import CoinDCXRest
+
+    async def run():
+        client = CoinDCXRest()
+        now_ms = 1_800_000_000_000
+        interval_ms = 5 * 60 * 1000
+        future_open = ((now_ms // interval_ms) + 1) * interval_ms
+        rows = [{
+            "time": future_open, "open": 100, "high": 102,
+            "low": 99, "close": 101, "volume": 10,
+        }]
+
+        async def fake_get(url, params=None):
+            return rows
+
+        client._get = fake_get
+        monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+        assert await client.get_candles("B-BTC_USDT", "5m", 10) == []
+
+    asyncio.run(run())
