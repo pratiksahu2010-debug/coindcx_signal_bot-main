@@ -21,3 +21,47 @@ async def save_signal(session, signal: dict) -> None:
         await session.commit()
     except Exception as e:
         logger.debug(f"save_signal skipped: {e}")
+
+
+async def claim_signal_once(signal: dict, candle_time_ms: int, ttl_hours: int = 4) -> bool:
+    """Claim one alert per pair/engine/direction across process restarts."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy.exc import IntegrityError
+    from database import db as database_db
+    from database.models import SignalDedupRecord
+
+    factory = database_db.SessionLocal
+    if factory is None:
+        logger.error("Persistent signal deduplication unavailable; suppressing alert")
+        return False
+
+    key = f"{signal['pair']}:{signal['engine']}:{signal['direction']}"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    expires = now + timedelta(hours=max(1, int(ttl_hours)))
+    async with factory() as session:
+        try:
+            record = await session.get(SignalDedupRecord, key)
+            if record is not None and record.expires_at and record.expires_at > now:
+                return False
+            if record is None:
+                record = SignalDedupRecord(
+                    dedup_key=key, candle_time_ms=int(candle_time_ms),
+                    payload=json.dumps(signal, default=str),
+                    created_at=now, expires_at=expires,
+                )
+                session.add(record)
+            else:
+                record.candle_time_ms = int(candle_time_ms)
+                record.payload = json.dumps(signal, default=str)
+                record.created_at = now
+                record.expires_at = expires
+            await session.commit()
+            return True
+        except IntegrityError:
+            await session.rollback()
+            return False
+        except Exception as exc:
+            await session.rollback()
+            logger.error(f"Persistent signal claim failed: {exc}")
+            return False
