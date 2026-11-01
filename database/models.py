@@ -28,3 +28,13 @@ class WatchlistRecord(Base):
     score: Mapped[float] = mapped_column(Float)
     payload: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SignalDedupRecord(Base):
+    """Durable per-pair/engine/direction alert lock across process restarts."""
+    __tablename__ = "signal_dedup"
+    dedup_key: Mapped[str] = mapped_column(String(96), primary_key=True)
+    candle_time_ms: Mapped[int] = mapped_column(Integer, default=0)
+    payload: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
