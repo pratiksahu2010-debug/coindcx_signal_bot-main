@@ -24,9 +24,9 @@
    - `SIGNAL_THRESHOLD=7.0`
    - `DATABASE_URL=sqlite+aiosqlite:///./coindcx_signal_bot.db` (already set by the included Render blueprint; no PostgreSQL setup)
 7. Keep exactly **one Render service instance** and the configured **one Uvicorn worker**. Do not deploy a second copy with the same Telegram bot token.
-8. Deploy
-8. Open bot in Telegram → send `/start`
-9. Cron-job.org → GET `https://YOUR-SERVICE.onrender.com/ping` every 10–14 min
+9. Deploy
+10. Open bot in Telegram → send `/start`
+11. Cron-job.org → GET `https://YOUR-SERVICE.onrender.com/ping` every 10–14 min
 
 ## Local run
 ```bash
