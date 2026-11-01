@@ -36,4 +36,4 @@ services:
       - key: TELEGRAM_ADMIN_IDS
         sync: false
       - key: DATABASE_URL
-        sync: false
+        value: "sqlite+aiosqlite:///./coindcx_signal_bot.db"
