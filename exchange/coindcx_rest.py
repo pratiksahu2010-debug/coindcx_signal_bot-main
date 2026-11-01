@@ -156,5 +156,24 @@ class CoinDCXRest:
             if c["time"] % duration_ms == 0
             and c["time"] + duration_ms + grace_ms <= now_ms
         ]
+        # Active listings can still return old history for dormant markets.
+        # Never pass an abnormally old latest candle to warmup or strategies.
+        if candles:
+            latest = candles[-1]
+            latest_close_ms = int(latest["time"]) + duration_ms
+            latest_age_seconds = (now_ms - latest_close_ms) / 1000.0
+            stale_limit_seconds = max(
+                float(settings.max_signal_age_seconds),
+                (duration_ms * 2) / 1000.0,
+            )
+            if latest_age_seconds > stale_limit_seconds:
+                logger.warning(
+                    f"MARKET_DATA_STALE {pair} timeframe={interval} "
+                    f"latest_open_ms={latest['time']} latest_close_ms={latest_close_ms} "
+                    f"age_seconds={latest_age_seconds:.1f} "
+                    f"stale_limit_seconds={stale_limit_seconds:.1f}; candles rejected"
+                )
+                candles = []
+
         self._candle_cache[cache_key] = (time.monotonic(), [dict(x) for x in candles])
         return candles
