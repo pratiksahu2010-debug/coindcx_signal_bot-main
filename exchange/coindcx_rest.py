@@ -82,7 +82,9 @@ class CoinDCXRest:
         # Normalize to consistent dicts
         candles = []
         for c in data:
-            if isinstance(c, dict):
+            if not isinstance(c, dict):
+                continue
+            try:
                 candles.append({
                     "time": c.get("time") or c.get("t") or c.get("timestamp"),
                     "open": float(c.get("open", 0)),
@@ -91,6 +93,8 @@ class CoinDCXRest:
                     "close": float(c.get("close", 0)),
                     "volume": float(c.get("volume", 0)),
                 })
+            except (TypeError, ValueError, OverflowError):
+                continue
         # Normalize timestamp to epoch milliseconds and discard malformed candles.
         normalized = []
         for c in candles:
