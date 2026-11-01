@@ -155,12 +155,16 @@ class SymbolManager:
             pairs = list(self.valid_pairs)
             has_liquidity = any(self.liquidity.get(pair, 0) > 0 for pair in pairs)
             if has_liquidity:
+                missing_volume = [pair for pair in pairs if self.liquidity.get(pair, 0.0) <= 0]
+                for pair in missing_volume:
+                    self.skipped_reasons[pair] = "no matching positive ticker volume"
+                pairs = [pair for pair in pairs if self.liquidity.get(pair, 0.0) > 0]
                 pairs.sort(key=lambda pair: (
                     -self.liquidity.get(pair, 0.0),
                     preferences.get(self._norm(pair), 10**9),
                     pair,
                 ))
-                logger.info(f"{label}: ranked active markets by 24h ticker liquidity")
+                logger.info(f"{label}: ranked markets with positive 24h ticker volume")
             else:
                 pairs.sort(key=lambda pair: (preferences.get(self._norm(pair), 10**9), pair))
                 logger.warning(f"{label}: no usable ticker volume; using configured preference order then symbol order")
@@ -173,7 +177,7 @@ class SymbolManager:
 
         selected = set(self.normal_symbols) | set(self.momentum_symbols)
         for pair in self.valid_pairs - selected:
-            self.skipped_reasons[pair] = "outside configured engine universe limit"
+            self.skipped_reasons.setdefault(pair, "outside configured engine universe limit")
         logger.info(
             f"Dynamic universe ready: normal={len(self.normal_symbols)}, "
             f"momentum={len(self.momentum_symbols)}, eligible={len(self.valid_pairs)}"
