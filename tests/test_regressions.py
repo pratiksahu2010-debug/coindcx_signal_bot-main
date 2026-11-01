@@ -236,3 +236,25 @@ def test_ticker_price_lookup_matches_coin_dcx_pair_aliases():
         assert await client.get_last_price("B-BTC_USDT") == 65000.0
         assert await client.get_last_price("B-MISSING_USDT") is None
     asyncio.run(run())
+
+
+def test_scan_wait_aligns_to_next_completed_candle_boundary():
+    from core.candle_timing import seconds_until_next_candle_boundary
+    interval = 5 * 60 * 1000
+    grace = 3 * 1000
+    assert seconds_until_next_candle_boundary(12*60*60*1000 + 2*60*1000, interval, grace) == 183.0
+    assert seconds_until_next_candle_boundary(12*60*60*1000 + 5*60*1000 + 1000, interval, grace) == 2.0
+    assert seconds_until_next_candle_boundary(12*60*60*1000 + 5*60*1000 + 4000, interval, grace) == 299.0
+
+
+def test_rest_client_rejects_historical_stale_market_candles():
+    import asyncio
+    from exchange.coindcx_rest import CoinDCXRest
+    async def run():
+        client = CoinDCXRest()
+        rows = [{"time": 1_708_397_700_000, "open": 100, "high": 102, "low": 99,
+                 "close": 101, "volume": 10}]
+        async def fake_get(url, params=None): return rows
+        client._get = fake_get
+        assert await client.get_candles("B-XMR_USDT", "5m", 10) == []
+    asyncio.run(run())
