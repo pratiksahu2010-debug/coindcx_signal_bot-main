@@ -22,7 +22,9 @@
    - `TELEGRAM_ADMIN_IDS` = your numeric Telegram user ID (from @userinfobot)
    - `APP_ENV=production`
    - `SIGNAL_THRESHOLD=7.0`
-7. Deploy
+   - `DATABASE_URL=sqlite+aiosqlite:///./coindcx_signal_bot.db` (already set by the included Render blueprint; no PostgreSQL setup)
+7. Keep exactly **one Render service instance** and the configured **one Uvicorn worker**. Do not deploy a second copy with the same Telegram bot token.
+8. Deploy
 8. Open bot in Telegram → send `/start`
 9. Cron-job.org → GET `https://YOUR-SERVICE.onrender.com/ping` every 10–14 min
 
@@ -61,19 +63,21 @@ MIT (bot code). CoinDCX API subject to their terms.
 Backtest performance is not claimed by this release: live market data and a historical labeled dataset are required to validate win rate, expectancy, and false-positive reduction.
 
 
-## Production persistence and Telegram singleton
+## SQLite deployment (no PostgreSQL required)
 
-- Configure `DATABASE_URL` to a shared PostgreSQL database on Render. The service accepts
-  `postgres://`, `postgresql://`, and `postgresql+asyncpg://` URLs and normalizes
-  Render's common URL form for asyncpg.
-- PostgreSQL is used for durable signal claims and a session-level advisory lock around
-  Telegram `getUpdates` polling. Only one updated service sharing that database can own
-  the polling lock. If the lock cannot be acquired, this instance remains send-only.
-- Production polling is intentionally disabled when no shared PostgreSQL database is
-  configured. Telegram signal delivery still works; bot commands require the single
-  polling owner.
-- SQLite is suitable for local development only. Render Free filesystem state is not a
-  durable cross-restart store.
+- The included Render blueprint sets `DATABASE_URL=sqlite+aiosqlite:///./coindcx_signal_bot.db`.
+  You do not need to create a PostgreSQL database or enter a database password.
+- Telegram command polling is enabled in SQLite mode. The Render service is configured
+  for one Uvicorn worker; keep exactly one running Render service instance using this
+  Telegram bot token. A second copy can cause Telegram's `Conflict: terminated by other
+  getUpdates request` error.
+- SQLite stores signal claims and bot state while the instance is running. **Render Free
+  filesystem storage is ephemeral**, so a restart, redeploy, or instance replacement can
+  erase this database. After that, recent signal-deduplication history may be lost and
+  an otherwise valid signal could be sent again.
+- The bot remains signal-only. No order execution is enabled.
+- PostgreSQL remains an optional future upgrade for durable shared state and advisory-lock
+  protection across multiple instances; it is not required for this single-instance setup.
 - Normal and Momentum engines select independent active USDT universes from live market
   details and ticker liquidity. Defaults are 40 Normal symbols and 80 Momentum symbols;
   the YAML files are tie-break preferences/fallbacks, not hard allowlists.
