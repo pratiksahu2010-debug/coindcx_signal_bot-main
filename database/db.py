@@ -16,6 +16,8 @@ SessionLocal = None
 
 async def init_db() -> None:
     global engine, SessionLocal
+    # Import models before create_all so every persistent table is registered.
+    from database import models  # noqa: F401
     url = settings.database_url
     if settings.use_postgres:
         engine = create_async_engine(
@@ -39,3 +41,11 @@ async def get_session() -> AsyncSession:
     assert SessionLocal is not None
     async with SessionLocal() as session:
         yield session
+
+async def dispose_db() -> None:
+    """Close the SQLAlchemy pool cleanly during application shutdown."""
+    global engine, SessionLocal
+    if engine is not None:
+        await engine.dispose()
+    engine = None
+    SessionLocal = None
