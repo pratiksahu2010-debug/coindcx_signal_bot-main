@@ -58,6 +58,10 @@ async def status(request: Request) -> Dict[str, Any]:
         "valid_symbols_momentum": app_state.get("valid_symbols_momentum", 0),
         "memory_mb": mem["memory_mb"],
         "database": app_state.get("database", "unknown"),
+        "telegram": app_state.get("telegram", "unknown"),
+        "telegram_polling": app_state.get("telegram_polling", False),
+        "eligible_symbols": app_state.get("eligible_symbols", 0),
+        "skipped_symbols": app_state.get("skipped_symbols", 0),
     }
 
 
