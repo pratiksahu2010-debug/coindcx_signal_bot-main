@@ -34,6 +34,12 @@ app.add_middleware(
 app.include_router(health_router)
 
 
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+async def root():
+    """Lightweight Render root probe; does not start scans or call external APIs."""
+    return {"status": "ok", "service": "coindcx-signal-bot", "signal_only": True}
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
     return {}
