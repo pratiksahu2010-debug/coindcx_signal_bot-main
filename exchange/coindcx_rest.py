@@ -17,6 +17,8 @@ class CoinDCXRest:
         self._client: Optional[httpx.AsyncClient] = None
         self._semaphore = asyncio.Semaphore(5)  # rate-limit friendly
         self._candle_cache = {}
+        # pair -> timeframe -> consecutive stale API observations
+        self._stale_market_timeframes: Dict[str, Dict[str, int]] = {}
 
     async def start(self) -> None:
         if self._client is None:
@@ -56,6 +58,10 @@ class CoinDCXRest:
         text = str(value or "").upper().strip()
         text = re.sub(r"^(B-|I-)", "", text)
         return re.sub(r"[^A-Z0-9]", "", text)
+
+    def get_stale_market_timeframes(self) -> Dict[str, Dict[str, int]]:
+        """Return a copy of stale candle-feed observations for universe quarantine."""
+        return {pair: dict(timeframes) for pair, timeframes in self._stale_market_timeframes.items()}
 
     async def get_last_price(self, pair: str) -> Optional[float]:
         """Fetch a fresh public ticker price for one market; never place orders."""
@@ -167,13 +173,23 @@ class CoinDCXRest:
                 (duration_ms * 2) / 1000.0,
             )
             if latest_age_seconds > stale_limit_seconds:
+                counts = self._stale_market_timeframes.setdefault(pair, {})
+                counts[interval] = counts.get(interval, 0) + 1
                 logger.warning(
                     f"MARKET_DATA_STALE {pair} timeframe={interval} "
                     f"latest_open_ms={latest['time']} latest_close_ms={latest_close_ms} "
                     f"age_seconds={latest_age_seconds:.1f} "
-                    f"stale_limit_seconds={stale_limit_seconds:.1f}; candles rejected"
+                    f"stale_limit_seconds={stale_limit_seconds:.1f} "
+                    f"consecutive_observations={counts[interval]}; candles rejected"
                 )
                 candles = []
+            elif candles:
+                # A fresh valid response resets this timeframe's stale streak.
+                timeframes = self._stale_market_timeframes.get(pair)
+                if timeframes:
+                    timeframes.pop(interval, None)
+                    if not timeframes:
+                        self._stale_market_timeframes.pop(pair, None)
 
         self._candle_cache[cache_key] = (time.monotonic(), [dict(x) for x in candles])
         return candles
