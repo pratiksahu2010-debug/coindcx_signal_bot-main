@@ -176,3 +176,29 @@ def test_persistent_signal_claim_blocks_restart_duplicate(tmp_path, monkeypatch)
             await test_engine.dispose()
 
     asyncio.run(run())
+
+
+def test_candle_age_is_measured_from_close_not_open():
+    from core.candle_timing import candle_age_seconds
+    # 5m candle opened at 12:00 and closed at 12:05; now is 12:06:30.
+    assert candle_age_seconds(12 * 60 * 60 * 1000 + 6 * 60 * 1000 + 30 * 1000,
+                              12 * 60 * 60 * 1000 + 0, 5 * 60 * 1000) == 90.0
+
+
+def test_15m_context_never_uses_a_candle_newer_than_5m_decision():
+    from core.candle_timing import latest_asof_candle_index
+    # Entry 5m candle closes at 12:35. Context 12:30-12:45 is future data;
+    # the latest eligible context is 12:15-12:30.
+    times = [12 * 60 * 60 * 1000 + minute * 60 * 1000 for minute in (0, 15, 30)]
+    idx = latest_asof_candle_index(times, 15 * 60 * 1000,
+                                   12 * 60 * 60 * 1000 + 35 * 60 * 1000)
+    assert idx == 1
+
+
+def test_15m_context_rejects_missing_or_too_old_history():
+    from core.candle_timing import latest_asof_candle_index
+    base = 12 * 60 * 60 * 1000
+    assert latest_asof_candle_index([base + 30 * 60 * 1000], 15 * 60 * 1000,
+                                    base + 35 * 60 * 1000) is None
+    assert latest_asof_candle_index([base], 15 * 60 * 1000,
+                                    base + 35 * 60 * 1000) is None
