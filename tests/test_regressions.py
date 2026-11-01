@@ -81,6 +81,10 @@ def test_normal_and_momentum_candle_cursors_are_independent():
     engine = SignalEngine(rest=object(), symbols=object(), candles=object())
     engine._last_processed["normal"]["B-BTC_USDT"] = 123
     assert engine._last_processed["momentum"].get("B-BTC_USDT") is None
+    assert engine.signals["normal"] is not engine.signals["momentum"]
+    assert engine.cooldowns["normal"] is not engine.cooldowns["momentum"]
+    assert engine.watchlists["normal"] is not engine.watchlists["momentum"]
+    assert engine.normal_scoring is not engine.momentum_scoring
 
 
 def test_dynamic_symbol_universe_uses_ticker_liquidity_and_active_status():
