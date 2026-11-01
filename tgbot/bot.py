@@ -61,11 +61,12 @@ class TelegramBot:
             await self.app.initialize()
             await self.app.start()
 
-            # In production, Telegram polling is guarded by a PostgreSQL
-            # session-level advisory lock. The lock connection stays open for
-            # the entire polling lifetime, so a second Render service cannot
-            # poll with the same token while sharing the same database.
-            may_poll = not settings.is_production
+            # Render Free deployment is configured as ONE web-service instance
+            # and ONE Uvicorn worker. In SQLite mode, start the poller directly;
+            # PostgreSQL advisory locking remains available when PostgreSQL is
+            # explicitly configured. Do not silently disable Telegram commands
+            # merely because the user has no PostgreSQL database.
+            may_poll = True
             if settings.use_postgres:
                 try:
                     from database import db as database_db
@@ -88,9 +89,11 @@ class TelegramBot:
                         await self._polling_lock_connection.close()
                         self._polling_lock_connection = None
                     logger.error(f"Telegram polling disabled because singleton lock could not be acquired: {lock_error}")
-            elif settings.is_production:
-                may_poll = False
-                logger.error("Telegram polling disabled in production: configure shared PostgreSQL DATABASE_URL for duplicate-instance protection")
+            else:
+                logger.warning(
+                    "Telegram polling is using single-instance SQLite mode. Keep exactly "
+                    "one Render service instance and one Uvicorn worker for this bot token."
+                )
 
             if may_poll and self.app.updater:
                 try:
