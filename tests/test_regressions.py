@@ -117,6 +117,41 @@ def test_dynamic_symbol_universe_uses_ticker_liquidity_and_active_status():
     asyncio.run(run())
 
 
+def test_dynamic_symbol_universe_excludes_stablecoin_pairs():
+    import asyncio
+    from exchange.symbol_manager import SymbolManager
+
+    class FakeRest:
+        async def get_market_details(self):
+            return [
+                {"pair": "B-BTC_USDT", "base_currency_short_name": "USDT", "target_currency_short_name": "BTC", "status": "active"},
+                {"pair": "B-USDC_USDT", "base_currency_short_name": "USDT", "target_currency_short_name": "USDC", "status": "active"},
+                {"pair": "B-DAI_USDT", "base_currency_short_name": "USDT", "target_currency_short_name": "DAI", "status": "active"},
+                {"pair": "B-ETH_USDT", "base_currency_short_name": "USDT", "target_currency_short_name": "ETH", "status": "active"},
+            ]
+
+        async def get_ticker(self):
+            return [
+                {"market": "B-BTC_USDT", "volume": "10", "last_price": "100"},
+                {"market": "B-USDC_USDT", "volume": "1000000", "last_price": "1"},
+                {"market": "B-DAI_USDT", "volume": "500000", "last_price": "1"},
+                {"market": "B-ETH_USDT", "volume": "20", "last_price": "10"},
+            ]
+
+    async def run():
+        manager = SymbolManager(FakeRest())
+        await manager.load_and_validate()
+        assert manager.valid_pairs == {"B-BTC_USDT", "B-ETH_USDT"}
+        assert "B-USDC_USDT" not in manager.normal_symbols
+        assert "B-USDC_USDT" not in manager.momentum_symbols
+        assert "B-DAI_USDT" not in manager.normal_symbols
+        assert "B-DAI_USDT" not in manager.momentum_symbols
+        assert manager.skipped_reasons["B-USDC_USDT"].startswith("stablecoin-to-USDT pair")
+        assert manager.skipped_reasons["B-DAI_USDT"].startswith("stablecoin-to-USDT pair")
+
+    asyncio.run(run())
+
+
 def test_persistent_signal_claim_blocks_restart_duplicate(tmp_path, monkeypatch):
     import asyncio
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
