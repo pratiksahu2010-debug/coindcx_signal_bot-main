@@ -31,7 +31,7 @@ class WatchlistRecord(Base):
 
 
 class SignalDedupRecord(Base):
-    """Durable per-pair/engine/direction alert lock across process restarts."""
+    """Durable per-pair/direction/candle alert lock shared across both engines."""
     __tablename__ = "signal_dedup"
     dedup_key: Mapped[str] = mapped_column(String(96), primary_key=True)
     candle_time_ms: Mapped[int] = mapped_column(Integer, default=0)
