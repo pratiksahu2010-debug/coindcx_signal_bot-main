@@ -319,7 +319,11 @@ class SignalEngine:
             if adx_v is None or adx_v < settings.normal_adx_min:
                 return
             # Hard quality gates prevent a high score from compensating for bad context.
-            if not indicators["confirm_15m"] or not indicators["di_direction_ok"]:
+            if (
+                not indicators["confirm_15m"]
+                or not indicators["di_direction_ok"]
+                or not indicators["macd_direction_ok"]
+            ):
                 return
             if not indicators["adx_rising"] and (adx_v is None or adx_v < 30):
                 return
@@ -386,7 +390,12 @@ class SignalEngine:
             # Momentum must be a directional expansion, not merely a high score.
             momentum_state = detect_momentum_state(indicators)
             valid_momentum_state = momentum_state in ("EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION")
-            if not valid_momentum_state or not indicators["di_direction_ok"] or not indicators["directional_candle"]:
+            if (
+                not valid_momentum_state
+                or not indicators["macd_direction_ok"]
+                or not indicators["di_direction_ok"]
+                or not indicators["directional_candle"]
+            ):
                 return
             if not indicators["not_chasing"] and not indicators["structure_break"]:
                 return
