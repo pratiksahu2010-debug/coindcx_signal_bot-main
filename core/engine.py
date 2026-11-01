@@ -176,6 +176,9 @@ class SignalEngine:
 
     async def _scan_pairs(self, pairs: List[str], engine: str) -> None:
         """Scan one engine with bounded concurrency matching the REST semaphore."""
+        started = asyncio.get_running_loop().time()
+        errors_before = self.scan_errors[engine]
+
         async def process(pair: str) -> None:
             try:
                 await self._process_pair(pair, engine=engine)
@@ -187,6 +190,16 @@ class SignalEngine:
         # tasks concurrently lets that limit work instead of serializing 120
         # markets and allowing later signals to age out before evaluation.
         await asyncio.gather(*(process(pair) for pair in pairs))
+
+        duration_ms = int((asyncio.get_running_loop().time() - started) * 1000)
+        active = len(self.signals[engine].list_active())
+        watching = self.watchlists[engine].count()
+        logger.info(
+            f"SCAN_CYCLE_SUMMARY engine={engine} symbols_submitted={len(pairs)} "
+            f"scan_errors={self.scan_errors[engine]} "
+            f"errors_this_cycle={self.scan_errors[engine] - errors_before} "
+            f"active_signals={active} watchlist={watching} duration_ms={duration_ms}"
+        )
 
     async def _scan_normal(self) -> None:
         await self._scan_pairs(self.symbols.normal_symbols, "normal")
