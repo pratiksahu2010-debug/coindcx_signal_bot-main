@@ -72,19 +72,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "skipped_symbols": len(symbol_mgr.skipped_reasons),
     }
 
-    scan_task = asyncio.create_task(engine.run_scan_loop(app))
+    # Never run strategy scans without durable signal-claim storage. Keep the
+    # FastAPI service and lightweight health endpoints alive for Render, but
+    # expose an explicit degraded state until database initialization succeeds.
+    scan_task = None
+    if database_ready:
+        scan_task = asyncio.create_task(engine.run_scan_loop(app))
+    else:
+        app.state.bot_state["normal_engine"] = "paused_database_unavailable"
+        app.state.bot_state["momentum_engine"] = "paused_database_unavailable"
+        logger.critical(
+            "SIGNAL_SCANNING_DISABLED database_unavailable=true; "
+            "health endpoints remain available, no market scans or alerts will run"
+        )
 
-    logger.info("Startup complete. Engines ready.")
+    logger.info("Startup complete. Engines ready." )
     check_memory()
 
     yield
 
     logger.info("Shutting down...")
-    scan_task.cancel()
-    try:
-        await scan_task
-    except asyncio.CancelledError:
-        pass
+    if scan_task is not None:
+        scan_task.cancel()
+        try:
+            await scan_task
+        except asyncio.CancelledError:
+            pass
     await engine.shutdown()
     await tg.stop()
     await rest.stop()
