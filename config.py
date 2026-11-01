@@ -45,6 +45,9 @@ if HAS_PYDANTIC:
         memory_warning_mb: int = Field(default=400, alias="MEMORY_WARNING_MB")
         normal_adx_min: float = Field(default=25.0, alias="NORMAL_ADX_MIN")
         momentum_adx_explosion: float = Field(default=18.0, alias="MOMENTUM_ADX_MIN")
+        normal_symbol_limit: int = Field(default=40, alias="NORMAL_SYMBOL_LIMIT")
+        momentum_symbol_limit: int = Field(default=80, alias="MOMENTUM_SYMBOL_LIMIT")
+        candle_close_grace_seconds: int = Field(default=3, alias="CANDLE_CLOSE_GRACE_SECONDS")
         rvol_min: float = 1.2
         atr_min_pct: float = 0.3
 
@@ -86,6 +89,9 @@ else:
             self.memory_warning_mb = int(os.getenv("MEMORY_WARNING_MB", "400"))
             self.normal_adx_min = float(os.getenv("NORMAL_ADX_MIN", "25.0"))
             self.momentum_adx_explosion = float(os.getenv("MOMENTUM_ADX_MIN", "18.0"))
+            self.normal_symbol_limit = int(os.getenv("NORMAL_SYMBOL_LIMIT", "40"))
+            self.momentum_symbol_limit = int(os.getenv("MOMENTUM_SYMBOL_LIMIT", "80"))
+            self.candle_close_grace_seconds = int(os.getenv("CANDLE_CLOSE_GRACE_SECONDS", "3"))
             self.rvol_min = 1.2
             self.atr_min_pct = 0.3
 
