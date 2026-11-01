@@ -59,3 +59,24 @@ MIT (bot code). CoinDCX API subject to their terms.
 - Signal-only operation is retained; no order-placement endpoint or execution path is added.
 
 Backtest performance is not claimed by this release: live market data and a historical labeled dataset are required to validate win rate, expectancy, and false-positive reduction.
+
+
+## Production persistence and Telegram singleton
+
+- Configure `DATABASE_URL` to a shared PostgreSQL database on Render. The service accepts
+  `postgres://`, `postgresql://`, and `postgresql+asyncpg://` URLs and normalizes
+  Render's common URL form for asyncpg.
+- PostgreSQL is used for durable signal claims and a session-level advisory lock around
+  Telegram `getUpdates` polling. Only one updated service sharing that database can own
+  the polling lock. If the lock cannot be acquired, this instance remains send-only.
+- Production polling is intentionally disabled when no shared PostgreSQL database is
+  configured. Telegram signal delivery still works; bot commands require the single
+  polling owner.
+- SQLite is suitable for local development only. Render Free filesystem state is not a
+  durable cross-restart store.
+- Normal and Momentum engines select independent active USDT universes from live market
+  details and ticker liquidity. Defaults are 40 Normal symbols and 80 Momentum symbols;
+  the YAML files are tie-break preferences/fallbacks, not hard allowlists.
+- Only aligned, fully closed candles are passed to strategies. The close-publication
+  grace period defaults to 3 seconds and is configurable with
+  `CANDLE_CLOSE_GRACE_SECONDS`.
