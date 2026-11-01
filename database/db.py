@@ -35,8 +35,19 @@ async def init_db() -> None:
             pool_recycle=300,
         )
     else:
-        engine = create_async_engine(url, echo=False)
-        logger.warning("Using SQLite — production persistence not guaranteed on Render Free")
+        engine = create_async_engine(
+            url,
+            echo=False,
+            pool_pre_ping=True,
+            # Give short concurrent writes from the Normal and Momentum engines
+            # time to complete instead of failing immediately with SQLITE_BUSY.
+            connect_args={"timeout": 30},
+        )
+        logger.warning(
+            "Using SQLite. State and deduplication work while this Render instance "
+            "is running, but the Free filesystem is ephemeral and state can reset "
+            "after a restart or redeploy."
+        )
 
     SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as conn:
