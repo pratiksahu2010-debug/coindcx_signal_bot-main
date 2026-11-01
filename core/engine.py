@@ -155,21 +155,25 @@ class SignalEngine:
             await asyncio.sleep(0.2)  # polite
         logger.info("Warmup complete.")
 
-    async def _scan_normal(self) -> None:
-        for pair in self.symbols.normal_symbols:
+    async def _scan_pairs(self, pairs: List[str], engine: str) -> None:
+        """Scan one engine with bounded concurrency matching the REST semaphore."""
+        async def process(pair: str) -> None:
             try:
-                await self._process_pair(pair, engine="normal")
-            except Exception as e:
-                self.scan_errors["normal"] += 1
-                logger.exception(f"Normal scan failed for {pair}: {e}")
+                await self._process_pair(pair, engine=engine)
+            except Exception as exc:
+                self.scan_errors[engine] += 1
+                logger.exception(f"{engine.title()} scan failed for {pair}: {exc}")
+
+        # CoinDCXRest applies a five-request semaphore. Scheduling the symbol
+        # tasks concurrently lets that limit work instead of serializing 120
+        # markets and allowing later signals to age out before evaluation.
+        await asyncio.gather(*(process(pair) for pair in pairs))
+
+    async def _scan_normal(self) -> None:
+        await self._scan_pairs(self.symbols.normal_symbols, "normal")
 
     async def _scan_momentum(self) -> None:
-        for pair in self.symbols.momentum_symbols:
-            try:
-                await self._process_pair(pair, engine="momentum")
-            except Exception as e:
-                self.scan_errors["momentum"] += 1
-                logger.exception(f"Momentum scan failed for {pair}: {e}")
+        await self._scan_pairs(self.symbols.momentum_symbols, "momentum")
 
     async def _process_pair(self, pair: str, engine: str) -> None:
         # Refresh primary TF candles
@@ -515,7 +519,7 @@ class SignalEngine:
                     logger.warning(f"Signal suppressed: persistent duplicate/claim unavailable for {pair} {engine} {direction}")
                     return
                 self.cooldowns[engine].set(pair, engine, direction)
-                logger.info(f"SIGNAL {result.grade} {direction} {pair} score={result.total} engine={engine} strategy={strategy}")
+                logger.info(f"SIGNAL {result.grade} {direction} {pair} score={result.total} engine={engine} strategy={strategy} candle_open_ms={candle_ts} candle_close_ms={candle_close_ms} age_seconds={signal['signal_age_seconds']:.1f} confirm_15m_open_ms={signal.get('confirm_candle_time_ms')}")
                 # Push to Telegram only after durable claim succeeds.
                 if self.telegram:
                     try:
