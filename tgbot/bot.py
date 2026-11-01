@@ -1,12 +1,10 @@
 """Telegram bot integration — signal delivery + commands."""
 from typing import Optional, List, Any, Dict
 from datetime import datetime, timezone
-import asyncio
 import re
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
-from telegram.error import TelegramError, Conflict
-from sqlalchemy import text as sql_text
+from telegram.error import TelegramError
 
 from config import settings
 from utils.logger import logger
@@ -46,9 +44,6 @@ class TelegramBot:
         self.bot: Optional[Bot] = None
         self.admin_ids: List[int] = settings.admin_ids
         self.polling_active = False
-        self.polling_conflict = False
-        self._polling_lock_connection = None
-        self._polling_lock_id = 73190420261101
 
     async def start(self) -> None:
         if not self.token:
@@ -57,96 +52,24 @@ class TelegramBot:
         try:
             self.app = Application.builder().token(self.token).build()
             self.bot = self.app.bot
-            self._register_handlers()
             await self.app.initialize()
             await self.app.start()
 
-            # Render Free deployment is configured as ONE web-service instance
-            # and ONE Uvicorn worker. In SQLite mode, start the poller directly;
-            # PostgreSQL advisory locking remains available when PostgreSQL is
-            # explicitly configured. Do not silently disable Telegram commands
-            # merely because the user has no PostgreSQL database.
-            may_poll = True
-            if settings.use_postgres:
-                try:
-                    from database import db as database_db
-                    if database_db.engine is None:
-                        raise RuntimeError("database engine is not initialized")
-                    self._polling_lock_connection = await database_db.engine.connect()
-                    acquired = await self._polling_lock_connection.scalar(
-                        sql_text("SELECT pg_try_advisory_lock(:lock_id)"),
-                        {"lock_id": self._polling_lock_id},
-                    )
-                    may_poll = bool(acquired)
-                    await self._polling_lock_connection.commit()
-                    if not may_poll:
-                        await self._polling_lock_connection.close()
-                        self._polling_lock_connection = None
-                        logger.warning("Telegram polling not started: another instance owns the PostgreSQL polling lock")
-                except Exception as lock_error:
-                    may_poll = False
-                    if self._polling_lock_connection is not None:
-                        await self._polling_lock_connection.close()
-                        self._polling_lock_connection = None
-                    logger.error(f"Telegram polling disabled because singleton lock could not be acquired: {lock_error}")
-            else:
-                logger.warning(
-                    "Telegram polling is using single-instance SQLite mode. Keep exactly "
-                    "one Render service instance and one Uvicorn worker for this bot token."
-                )
-
-            if may_poll and self.app.updater:
-                try:
-                    await self.app.updater.start_polling(
-                        drop_pending_updates=True,
-                        error_callback=self._on_polling_error,
-                    )
-                    self.polling_active = True
-                except Conflict as exc:
-                    self.polling_conflict = True
-                    logger.error(f"Telegram polling conflict at startup; polling disabled: {exc}")
-                except Exception as exc:
-                    logger.error(f"Telegram polling failed to start: {exc}")
+            # Push-only Telegram mode: this service sends alerts but never calls
+            # getUpdates. This prevents polling conflicts when the same token is
+            # also used by another bot process or Telegram client.
+            self.polling_active = False
             logger.info(
                 f"Telegram bot initialized (admins: {self.admin_ids}, "
-                f"polling: {'active' if self.polling_active else 'disabled'})"
+                "mode: push-only, polling: disabled)"
             )
         except Exception as e:
             logger.exception(f"Telegram start failed: {e}")
             await self.stop()
             self.bot = None
 
-    def _on_polling_error(self, error: BaseException) -> None:
-        """Stop retry storms if Telegram reports another getUpdates consumer."""
-        if isinstance(error, Conflict):
-            self.polling_conflict = True
-            self.polling_active = False
-            logger.critical(
-                "Telegram getUpdates conflict detected. Polling is being stopped; "
-                "signal delivery remains available. Ensure only one service uses this token."
-            )
-            try:
-                asyncio.get_running_loop().create_task(self._stop_conflicted_poller())
-            except RuntimeError:
-                pass
-        else:
-            logger.warning(f"Telegram polling network error: {error}")
-
-    async def _stop_conflicted_poller(self) -> None:
-        try:
-            if self.app and self.app.updater and self.app.updater.running:
-                await self.app.updater.stop()
-        except Exception as exc:
-            logger.debug(f"Stopping conflicted Telegram poller: {exc}")
-
     async def stop(self) -> None:
-        # Stop each lifecycle stage independently so one cleanup failure cannot
-        # skip application shutdown or release the cross-instance lock.
-        if self.app and getattr(self.app, "updater", None) and self.app.updater.running:
-            try:
-                await self.app.updater.stop()
-            except Exception as exc:
-                logger.warning(f"Telegram updater stop note: {exc}")
+        # No Telegram updater is started in push-only mode.
         self.polling_active = False
         if self.app and self.app.running:
             try:
@@ -158,18 +81,6 @@ class TelegramBot:
                 await self.app.shutdown()
             except Exception as exc:
                 logger.warning(f"Telegram application shutdown note: {exc}")
-        if self._polling_lock_connection is not None:
-            try:
-                await self._polling_lock_connection.execute(
-                    sql_text("SELECT pg_advisory_unlock(:lock_id)"),
-                    {"lock_id": self._polling_lock_id},
-                )
-                await self._polling_lock_connection.commit()
-                await self._polling_lock_connection.close()
-            except Exception as exc:
-                logger.warning(f"Telegram polling lock release note: {exc}")
-            self._polling_lock_connection = None
-
     def _register_handlers(self) -> None:
         assert self.app
         self.app.add_handler(CommandHandler("start", self.cmd_start))
