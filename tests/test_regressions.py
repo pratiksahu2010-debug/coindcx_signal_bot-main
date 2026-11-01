@@ -258,3 +258,87 @@ def test_rest_client_rejects_historical_stale_market_candles():
         client._get = fake_get
         assert await client.get_candles("B-XMR_USDT", "5m", 10) == []
     asyncio.run(run())
+
+
+
+def test_stale_market_quarantine_filters_both_engine_universes_and_restores():
+    import asyncio
+    import time
+    from exchange.symbol_manager import SymbolManager
+    from config import settings
+
+    class FakeRest:
+        def __init__(self):
+            self.stale = {"B-BAD_USDT": {"5m": 2, "15m": 1}}
+            self.healthy = False
+
+        async def get_market_details(self):
+            return [
+                {"pair": f"B-{name}_USDT", "base_currency_short_name": "USDT",
+                 "target_currency_short_name": name, "status": "active"}
+                for name in ("BTC", "ETH", "SOL", "BAD")
+            ]
+
+        async def get_ticker(self):
+            return [
+                {"market": f"B-{name}_USDT", "volume": str(volume), "last_price": "10"}
+                for name, volume in (("BAD", 1000), ("BTC", 900), ("ETH", 800), ("SOL", 700))
+            ]
+
+        def get_stale_market_timeframes(self):
+            return {pair: dict(value) for pair, value in self.stale.items()}
+
+        async def get_candles(self, pair, interval, limit=100):
+            if not self.healthy:
+                return []
+            return [{"time": i, "open": 1, "high": 2, "low": .5, "close": 1.5, "volume": 10}
+                    for i in range(100 if interval == "5m" else 110)]
+
+    async def run():
+        old_normal, old_momentum = settings.normal_symbol_limit, settings.momentum_symbol_limit
+        settings.normal_symbol_limit, settings.momentum_symbol_limit = 2, 3
+        try:
+            rest = FakeRest()
+            manager = SymbolManager(rest)
+            await manager.load_and_validate()
+            assert manager.normal_symbols == ["B-BAD_USDT", "B-BTC_USDT"]
+            assert manager.momentum_symbols == ["B-BAD_USDT", "B-BTC_USDT", "B-ETH_USDT"]
+
+            manager._refresh_quarantine_from_rest()
+            manager._select_active_symbols()
+            assert "B-BAD_USDT" not in manager.normal_symbols
+            assert "B-BAD_USDT" not in manager.momentum_symbols
+            assert len(manager.normal_symbols) == 2
+            assert len(manager.momentum_symbols) == 3
+            assert "B-BAD_USDT" in manager.skipped_reasons
+
+            # Simulate the 15-minute retry deadline and recovery of both feeds.
+            rest.stale.clear()
+            rest.healthy = True
+            manager._quarantined["B-BAD_USDT"]["retry_at"] = time.time() - 1
+            await manager.refresh_universes()
+            assert "B-BAD_USDT" not in manager._quarantined
+            assert manager.normal_symbols[0] == "B-BAD_USDT"
+            assert manager.momentum_symbols[0] == "B-BAD_USDT"
+        finally:
+            settings.normal_symbol_limit, settings.momentum_symbol_limit = old_normal, old_momentum
+
+    asyncio.run(run())
+
+
+def test_stale_market_quarantine_requires_repeated_or_both_timeframes():
+    from exchange.symbol_manager import SymbolManager
+
+    class FakeRest:
+        def __init__(self):
+            self.stale = {"B-ONE_USDT": {"5m": 1}, "B-TWO_USDT": {"5m": 1, "15m": 1}}
+        def get_stale_market_timeframes(self):
+            return self.stale
+
+    manager = SymbolManager(FakeRest())
+    manager._refresh_quarantine_from_rest()
+    assert "B-ONE_USDT" not in manager._quarantined
+    assert "B-TWO_USDT" in manager._quarantined
+    manager.rest.stale["B-ONE_USDT"]["5m"] = 2
+    manager._refresh_quarantine_from_rest()
+    assert "B-ONE_USDT" in manager._quarantined
