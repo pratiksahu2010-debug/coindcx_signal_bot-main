@@ -154,11 +154,11 @@ class SignalEngine:
         rsi_v = rsi(close, 14)
         atr_v = atr(high, low, close, 14)
         adx_res = adx(high, low, close, 14)
-        adx_v = adx_res[0] if adx_res else None
-        plus_di = adx_res[1] if adx_res else None
-        minus_di = adx_res[2] if adx_res else None
+        adx_v = adx_res[0] if adx_res is not None else None
+        plus_di = adx_res[1] if adx_res is not None else None
+        minus_di = adx_res[2] if adx_res is not None else None
         macd_res = macd(close)
-        macd_hist = macd_res[2] if macd_res else None
+        macd_hist = macd_res[2] if macd_res is not None else None
         # UTC-session anchored VWAP; avoids an arbitrary rolling 100-bar reset.
         day_start = (int(arr["time"][-1]) // 86_400_000) * 86_400_000
         day_idx = int(np.searchsorted(arr["time"], day_start, side="left"))
@@ -179,7 +179,7 @@ class SignalEngine:
         if len(close) >= 3:
             from indicators.adx import adx_series as _adx_series
             _a = _adx_series(high, low, close, 14)
-            adx_series = _a[0] if _a else None
+            adx_series = _a[0] if _a is not None else None
             adx_rising = bool(adx_series is not None and np.isfinite(adx_series[-1]) and np.isfinite(adx_series[-2]) and adx_series[-1] > adx_series[-2])
 
         # 15m confirmation: require actual directional EMA alignment, price/VWAP
@@ -189,14 +189,21 @@ class SignalEngine:
         if conf_data and len(conf_data) >= 55:
             self.candles.seed(pair, settings.candle_confirm_tf, conf_data)
             c_arr = self.candles.get_arrays(pair, settings.candle_confirm_tf)
-            c_close = c_arr.get("close", [])
-            c_high, c_low, c_vol = c_arr.get("high", []), c_arr.get("low", []), c_arr.get("volume", [])
+            c_close = np.asarray(c_arr.get("close", []), dtype=float)
+            c_high = np.asarray(c_arr.get("high", []), dtype=float)
+            c_low = np.asarray(c_arr.get("low", []), dtype=float)
+            c_vol = np.asarray(c_arr.get("volume", []), dtype=float)
             c_ema9, c_ema21, c_ema50 = ema(c_close, 9), ema(c_close, 21), ema(c_close, 50)
-            c_times = c_arr.get("time", [])
+            c_times = np.asarray(c_arr.get("time", []), dtype=np.int64)
             c_day_start = (int(c_times[-1]) // 86_400_000) * 86_400_000 if len(c_times) else 0
             c_day_idx = int(np.searchsorted(c_times, c_day_start, side="left")) if len(c_times) else 0
-            c_vwap = vwap(c_high[c_day_idx:], c_low[c_day_idx:], c_close[c_day_idx:], c_vol[c_day_idx:], period=None) if c_close else None
-            if all(v is not None for v in (c_ema9,c_ema21,c_ema50,c_vwap)) and len(c_close)>=2:
+            c_vwap = (
+                vwap(c_high[c_day_idx:], c_low[c_day_idx:], c_close[c_day_idx:], c_vol[c_day_idx:], period=None)
+                if c_close.size > 0 and c_high.size == c_close.size
+                and c_low.size == c_close.size and c_vol.size == c_close.size
+                else None
+            )
+            if all(v is not None for v in (c_ema9, c_ema21, c_ema50, c_vwap)) and c_close.size >= 2:
                 confirm_long = c_ema9 > c_ema21 > c_ema50 and c_close[-1] > c_vwap and c_ema9 > ema(c_close[:-1],9)
                 confirm_short = c_ema9 < c_ema21 < c_ema50 and c_close[-1] < c_vwap and c_ema9 < ema(c_close[:-1],9)
 
@@ -206,8 +213,8 @@ class SignalEngine:
         if len(close) >= 22:
             lookback_high = high[-21:-1]
             lookback_low = low[-21:-1]
-            resistance = max(lookback_high) if lookback_high else None
-            support = min(lookback_low) if lookback_low else None
+            resistance = float(np.max(lookback_high)) if lookback_high.size > 0 else None
+            support = float(np.min(lookback_low)) if lookback_low.size > 0 else None
             structure_ok = bool(resistance is not None and support is not None and
                                (close[-1] > resistance or close[-1] < support))
 
@@ -287,13 +294,13 @@ class SignalEngine:
             squeeze_release = False
             bw_expand = False
             bw_now = bw_prev = None
-            if bb and kc and len(close)>=22:
+            if bb is not None and kc is not None and len(close) >= 22:
                 upper_bb, mid_bb, lower_bb = bb
                 upper_kc, _, lower_kc = kc
                 bw_now = bandwidth(upper_bb, lower_bb, mid_bb)
                 prev_bb = bollinger_bands(close[:-1],20,2.0)
                 prev_kc = keltner_channels(high[:-1],low[:-1],close[:-1],20,1.5)
-                if prev_bb and prev_kc:
+                if prev_bb is not None and prev_kc is not None:
                     p_upper,p_mid,p_lower=prev_bb
                     p_kupper,_,p_klower=prev_kc
                     was_squeezed = p_upper < p_kupper and p_lower > p_klower
@@ -305,7 +312,7 @@ class SignalEngine:
             valid_atr = [x for x in atr_series if x is not None]
             atr_expansion = (valid_atr[-1]/np.mean(valid_atr[:-1])) if len(valid_atr)>=3 and np.mean(valid_atr[:-1])>0 else 1.0
             macd_series = macd(close)
-            hist_series = macd_series[2] if macd_series else []
+            hist_series = macd_series[2] if macd_series is not None else []
             macd_accel = len(hist_series)>=3 and ((hist_series[-1]>hist_series[-2]>hist_series[-3]) if direction=="LONG" else (hist_series[-1]<hist_series[-2]<hist_series[-3]))
             rsi_series = [rsi(close[:i+1],14) for i in range(max(15,len(close)-4),len(close))]
             valid_rsi = [x for x in rsi_series if x is not None]
