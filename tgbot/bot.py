@@ -109,7 +109,8 @@ class TelegramBot:
                 f"polling: {'active' if self.polling_active else 'disabled'})"
             )
         except Exception as e:
-            logger.error(f"Telegram start failed: {e}")
+            logger.exception(f"Telegram start failed: {e}")
+            await self.stop()
             self.bot = None
 
     def _on_polling_error(self, error: BaseException) -> None:
@@ -136,28 +137,35 @@ class TelegramBot:
             logger.debug(f"Stopping conflicted Telegram poller: {exc}")
 
     async def stop(self) -> None:
-        try:
-            if self.app and getattr(self.app, "updater", None) and self.app.updater.running:
+        # Stop each lifecycle stage independently so one cleanup failure cannot
+        # skip application shutdown or release the cross-instance lock.
+        if self.app and getattr(self.app, "updater", None) and self.app.updater.running:
+            try:
                 await self.app.updater.stop()
-            self.polling_active = False
-            if self.app and self.app.running:
+            except Exception as exc:
+                logger.warning(f"Telegram updater stop note: {exc}")
+        self.polling_active = False
+        if self.app and self.app.running:
+            try:
                 await self.app.stop()
-            if self.app:
+            except Exception as exc:
+                logger.warning(f"Telegram application stop note: {exc}")
+        if self.app:
+            try:
                 await self.app.shutdown()
-        except Exception as e:
-            logger.debug(f"Telegram stop: {e}")
-        finally:
-            if self._polling_lock_connection is not None:
-                try:
-                    await self._polling_lock_connection.execute(
-                        sql_text("SELECT pg_advisory_unlock(:lock_id)"),
-                        {"lock_id": self._polling_lock_id},
-                    )
-                    await self._polling_lock_connection.commit()
-                    await self._polling_lock_connection.close()
-                except Exception as exc:
-                    logger.warning(f"Telegram polling lock release note: {exc}")
-                self._polling_lock_connection = None
+            except Exception as exc:
+                logger.warning(f"Telegram application shutdown note: {exc}")
+        if self._polling_lock_connection is not None:
+            try:
+                await self._polling_lock_connection.execute(
+                    sql_text("SELECT pg_advisory_unlock(:lock_id)"),
+                    {"lock_id": self._polling_lock_id},
+                )
+                await self._polling_lock_connection.commit()
+                await self._polling_lock_connection.close()
+            except Exception as exc:
+                logger.warning(f"Telegram polling lock release note: {exc}")
+            self._polling_lock_connection = None
 
     def _register_handlers(self) -> None:
         assert self.app
