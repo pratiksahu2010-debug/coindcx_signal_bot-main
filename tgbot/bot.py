@@ -77,6 +77,7 @@ class TelegramBot:
                         {"lock_id": self._polling_lock_id},
                     )
                     may_poll = bool(acquired)
+                    await self._polling_lock_connection.commit()
                     if not may_poll:
                         await self._polling_lock_connection.close()
                         self._polling_lock_connection = None
@@ -152,6 +153,7 @@ class TelegramBot:
                         sql_text("SELECT pg_advisory_unlock(:lock_id)"),
                         {"lock_id": self._polling_lock_id},
                     )
+                    await self._polling_lock_connection.commit()
                     await self._polling_lock_connection.close()
                 except Exception as exc:
                     logger.warning(f"Telegram polling lock release note: {exc}")
