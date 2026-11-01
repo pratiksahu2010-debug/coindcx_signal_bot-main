@@ -50,6 +50,35 @@ class CoinDCXRest:
         data = await self._get(f"{self.base}/exchange/ticker")
         return data if isinstance(data, list) else []
 
+    @staticmethod
+    def _market_key(value: Any) -> str:
+        import re
+        text = str(value or "").upper().strip()
+        text = re.sub(r"^(B-|I-)", "", text)
+        return re.sub(r"[^A-Z0-9]", "", text)
+
+    async def get_last_price(self, pair: str) -> Optional[float]:
+        """Fetch a fresh public ticker price for one market; never place orders."""
+        wanted = self._market_key(pair)
+        rows = await self.get_ticker()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            aliases = (
+                row.get("market"), row.get("pair"), row.get("symbol"),
+                row.get("coindcx_name"), row.get("market_name"),
+            )
+            if not any(self._market_key(alias) == wanted for alias in aliases if alias):
+                continue
+            for key in ("last_price", "lastPrice", "price", "close"):
+                try:
+                    value = float(row.get(key))
+                    if value > 0 and __import__("math").isfinite(value):
+                        return value
+                except (TypeError, ValueError, OverflowError):
+                    continue
+        return None
+
     async def get_candles(
         self,
         pair: str,
