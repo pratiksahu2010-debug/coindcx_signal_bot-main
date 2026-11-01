@@ -24,6 +24,37 @@ from indicators import (
 import numpy as np
 
 
+def _macd_hist_history(closes: Any, points: int = 4) -> List[float]:
+    """Return recent MACD histogram observations.
+
+    indicators.macd() intentionally returns a single (line, signal, histogram)
+    tuple, not a historical series. Recalculate the last few prefixes to obtain
+    comparable closed-candle histogram observations for momentum acceleration.
+    """
+    try:
+        values = np.asarray(closes, dtype=float).reshape(-1)
+    except (TypeError, ValueError, OverflowError):
+        return []
+
+    # MACD needs slow(26) + signal(9) observations.
+    if values.size < 35 or points < 3:
+        return []
+
+    first_end = max(35, int(values.size) - int(points) + 1)
+    history: List[float] = []
+    for end in range(first_end, int(values.size) + 1):
+        result = macd(values[:end])
+        if result is None:
+            continue
+        try:
+            histogram = float(result[2])
+        except (TypeError, ValueError, IndexError, OverflowError):
+            continue
+        if np.isfinite(histogram):
+            history.append(histogram)
+    return history
+
+
 class SignalEngine:
     def __init__(
         self,
@@ -311,9 +342,15 @@ class SignalEngine:
             atr_series = [atr(high[:i+1],low[:i+1],close[:i+1],14) for i in range(max(14,len(close)-8),len(close))]
             valid_atr = [x for x in atr_series if x is not None]
             atr_expansion = (valid_atr[-1]/np.mean(valid_atr[:-1])) if len(valid_atr)>=3 and np.mean(valid_atr[:-1])>0 else 1.0
-            macd_series = macd(close)
-            hist_series = macd_series[2] if macd_series is not None else []
-            macd_accel = len(hist_series)>=3 and ((hist_series[-1]>hist_series[-2]>hist_series[-3]) if direction=="LONG" else (hist_series[-1]<hist_series[-2]<hist_series[-3]))
+            hist_series = _macd_hist_history(close, points=4)
+            macd_accel = (
+                len(hist_series) >= 3
+                and (
+                    hist_series[-1] > hist_series[-2] > hist_series[-3]
+                    if direction == "LONG"
+                    else hist_series[-1] < hist_series[-2] < hist_series[-3]
+                )
+            )
             rsi_series = [rsi(close[:i+1],14) for i in range(max(15,len(close)-4),len(close))]
             valid_rsi = [x for x in rsi_series if x is not None]
             rsi_accel = len(valid_rsi)>=3 and ((valid_rsi[-1]>valid_rsi[-2]>valid_rsi[-3]) if direction=="LONG" else (valid_rsi[-1]<valid_rsi[-2]<valid_rsi[-3]))
