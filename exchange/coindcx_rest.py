@@ -63,9 +63,9 @@ class CoinDCXRest:
         pair example: B-BTC_USDT
         interval: 1m, 5m, 15m, 30m, 1h, ...
         """
-        cache_key = (pair, interval, limit)
+        cache_key = (pair, interval, limit, start_time, end_time)
         cached = self._candle_cache.get(cache_key)
-        if cached and time.monotonic() - cached[0] < 15:
+        if cached and time.monotonic() - cached[0] < 2:
             return [dict(x) for x in cached[1]]
         params: Dict[str, Any] = {
             "pair": pair,
@@ -115,6 +115,13 @@ class CoinDCXRest:
         # Only completed candles may reach the strategy engine.
         duration_ms = int(parse_interval(interval).total_seconds() * 1000)
         now_ms = int(time.time() * 1000)
-        candles = [c for c in candles if c["time"] + duration_ms <= now_ms]
+        grace_ms = max(0, int(settings.candle_close_grace_seconds)) * 1000
+        # CoinDCX timestamps represent candle OPEN time. Reject misaligned bars
+        # and wait briefly after close so the exchange can publish final OHLCV.
+        candles = [
+            c for c in candles
+            if c["time"] % duration_ms == 0
+            and c["time"] + duration_ms + grace_ms <= now_ms
+        ]
         self._candle_cache[cache_key] = (time.monotonic(), [dict(x) for x in candles])
         return candles
