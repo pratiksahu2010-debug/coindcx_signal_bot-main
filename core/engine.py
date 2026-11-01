@@ -15,7 +15,7 @@ from core.scoring_engine import ScoringEngine
 from core.cooldown_manager import CooldownManager
 from core.watchlist_manager import WatchlistManager
 from core.signal_manager import SignalManager
-from core.risk_calculator import calculate_risk
+from core.risk_calculator import calculate_risk, is_entry_price_actionable
 from strategies.normal.strategy_manager import detect_strategy
 from strategies.momentum.strategy_manager import detect_momentum_state
 from indicators import (
@@ -504,6 +504,31 @@ class SignalEngine:
                 )
                 return
             signal["signal_age_seconds"] = round(final_age, 1)
+            # Require a fresh public ticker to remain inside the planned entry zone.
+            try:
+                live_price = await self.rest.get_last_price(pair)
+            except Exception as exc:
+                logger.warning(f"ENTRY_PRICE_CHECK_FAILED {pair}: {exc}")
+                self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                return
+            zone_low, zone_high = risk.entry_zone_low, risk.entry_zone_high
+            if live_price is None or not is_entry_price_actionable(live_price, zone_low, zone_high):
+                self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                logger.info(
+                    f"ENTRY_MOVED_SKIP {pair} engine={engine} direction={direction} "
+                    f"live_price={live_price} entry_zone={zone_low}-{zone_high}"
+                )
+                return
+            # Recheck freshness after the extra ticker request.
+            final_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
+            if final_age < 0 or final_age > settings.max_signal_age_seconds:
+                self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                logger.info(f"STALE_AFTER_TICKER_SKIP {pair} age_seconds={final_age:.1f}")
+                return
+            signal["live_price"] = live_price
+            signal["entry_checked_at"] = utc_iso(utc_now())
+            signal["signal_age_seconds"] = round(final_age, 1)
+            signal["timestamp"] = utc_iso(utc_now())
             self._last_processed.setdefault(engine, {})[pair] = candle_ts
             if self.signals[engine].add(signal):
                 # Durable claim blocks duplicate alerts after a Render restart or
