@@ -33,3 +33,13 @@ def calculate_risk(price: float, atr: float, direction: str, atr_mult_sl: float=
     return RiskLevels(round(price,8),round(zone[0],8),round(zone[1],8),round(sl,8),
         round(targets[0],8),round(targets[1],8),round(targets[2],8),round(risk/price*100,4),
         round(rrs[0],2),round(rrs[1],2),round(rrs[2],2),round(sl,8))
+
+
+def is_entry_price_actionable(live_price: float, zone_low: float, zone_high: float) -> bool:
+    """Return True only when a fresh ticker price remains inside the planned entry zone."""
+    try:
+        price, low, high = float(live_price), float(zone_low), float(zone_high)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    import math
+    return math.isfinite(price) and math.isfinite(low) and math.isfinite(high) and 0 < low <= price <= high
