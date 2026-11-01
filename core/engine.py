@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from config import settings
 from utils.logger import logger
-from utils.time_utils import utc_iso, utc_now
+from utils.time_utils import utc_iso, utc_now, parse_interval
+from core.candle_timing import candle_age_seconds, latest_asof_candle_index
 from utils.memory_monitor import check_memory, safe_gc
 from exchange.coindcx_rest import CoinDCXRest
 from exchange.symbol_manager import SymbolManager
@@ -191,10 +192,21 @@ class SignalEngine:
         if engine not in ("normal", "momentum"):
             raise ValueError(f"Unknown strategy engine: {engine}")
         candle_ts = int(arr["time"][-1])
+        primary_interval_ms = int(parse_interval(primary).total_seconds() * 1000)
+        candle_close_ms = candle_ts + primary_interval_ms
         # Update active signal outcomes on every fresh closed candle before deciding
         # whether this engine has already evaluated the candle.
         self._update_signal_outcomes(pair, engine, float(high[-1]), float(low[-1]))
         if self._last_processed.setdefault(engine, {}).get(pair) == candle_ts:
+            return
+        initial_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
+        if initial_age < 0 or initial_age > settings.max_signal_age_seconds:
+            self._last_processed[engine][pair] = candle_ts
+            logger.info(
+                f"STALE_CANDLE_SKIP {pair} engine={engine} candle_open_ms={candle_ts} "
+                f"candle_close_ms={candle_close_ms} age_seconds={initial_age:.1f} "
+                f"max_age_seconds={settings.max_signal_age_seconds}"
+            )
             return
 
         # Indicators
@@ -243,8 +255,25 @@ class SignalEngine:
             c_high = np.asarray(c_arr.get("high", []), dtype=float)
             c_low = np.asarray(c_arr.get("low", []), dtype=float)
             c_vol = np.asarray(c_arr.get("volume", []), dtype=float)
-            c_ema9, c_ema21, c_ema50 = ema(c_close, 9), ema(c_close, 21), ema(c_close, 50)
             c_times = np.asarray(c_arr.get("time", []), dtype=np.int64)
+            confirm_interval_ms = int(parse_interval(settings.candle_confirm_tf).total_seconds() * 1000)
+            # Use only context candles that had closed by the entry candle's close.
+            # This prevents a REST request crossing a 15m boundary from leaking
+            # a newer 15m candle into an older 5m decision.
+            context_idx = latest_asof_candle_index(c_times, confirm_interval_ms, candle_close_ms)
+            if context_idx is not None:
+                c_close = c_close[:context_idx + 1]
+                c_high = c_high[:context_idx + 1]
+                c_low = c_low[:context_idx + 1]
+                c_vol = c_vol[:context_idx + 1]
+                c_times = c_times[:context_idx + 1]
+            else:
+                c_close = c_close[:0]
+                c_high = c_high[:0]
+                c_low = c_low[:0]
+                c_vol = c_vol[:0]
+                c_times = c_times[:0]
+            c_ema9, c_ema21, c_ema50 = ema(c_close, 9), ema(c_close, 21), ema(c_close, 50)
             c_day_start = (int(c_times[-1]) // 86_400_000) * 86_400_000 if len(c_times) else 0
             c_day_idx = int(np.searchsorted(c_times, c_day_start, side="left")) if len(c_times) else 0
             c_vwap = (
@@ -439,6 +468,9 @@ class SignalEngine:
             "components": [{"name": c.name, "points": c.points, "max": c.max_points, "expl": c.explanation} for c in result.components],
             "timestamp": utc_iso(utc_now()),
             "candle_time_ms": candle_ts,
+            "candle_close_time_ms": candle_close_ms,
+            "signal_age_seconds": round(candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms), 1),
+            "confirm_candle_time_ms": int(c_times[-1]) if c_times.size else None,
         }
         if risk:
             signal["risk"] = {
@@ -454,6 +486,17 @@ class SignalEngine:
             }
 
         if result.total >= max(7.0, settings.signal_threshold):
+            # Recheck immediately before claiming/sending: the scan may have
+            # taken long enough for this otherwise-valid candle to go stale.
+            final_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
+            if final_age < 0 or final_age > settings.max_signal_age_seconds:
+                self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                logger.info(
+                    f"STALE_SIGNAL_SUPPRESSED {pair} engine={engine} direction={direction} "
+                    f"candle_open_ms={candle_ts} age_seconds={final_age:.1f}"
+                )
+                return
+            signal["signal_age_seconds"] = round(final_age, 1)
             self._last_processed.setdefault(engine, {})[pair] = candle_ts
             if self.signals[engine].add(signal):
                 # Durable claim blocks duplicate alerts after a Render restart or
