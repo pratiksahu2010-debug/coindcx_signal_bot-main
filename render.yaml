@@ -8,7 +8,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
-        value: "3.12.7"
+        value: "3.12.8"
       - key: APP_ENV
         value: production
       - key: LOG_LEVEL
@@ -22,9 +22,15 @@ services:
       - key: ENABLE_WEBSOCKET
         value: "false"
       - key: ENABLE_NORMAL_ENGINE
-        value: "false"
+        value: "true"
       - key: ENABLE_MOMENTUM_ENGINE
-        value: "false"
+        value: "true"
+      - key: NORMAL_SYMBOL_LIMIT
+        value: "40"
+      - key: MOMENTUM_SYMBOL_LIMIT
+        value: "80"
+      - key: CANDLE_CLOSE_GRACE_SECONDS
+        value: "3"
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_ADMIN_IDS
