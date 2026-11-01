@@ -108,8 +108,14 @@ class SignalEngine:
                     state["uptime_seconds"] = int(
                         (utc_now() - app.state.start_time).total_seconds()
                     )
-                    state["normal_engine"] = "running"
-                    state["momentum_engine"] = "running"
+                    state["normal_engine"] = (
+                        "running" if settings.enable_normal_engine and self.symbols.normal_symbols
+                        else "no_symbols" if settings.enable_normal_engine else "disabled"
+                    )
+                    state["momentum_engine"] = (
+                        "running" if settings.enable_momentum_engine and self.symbols.momentum_symbols
+                        else "no_symbols" if settings.enable_momentum_engine else "disabled"
+                    )
                     state["last_market_update"] = utc_iso()
 
                     mem = check_memory(force_gc=True)
@@ -171,7 +177,8 @@ class SignalEngine:
         opens = arr["open"]
         # A candle timestamp is its opening time; REST client has already removed
         # unfinished bars. Process each completed bar once per engine.
-        candle_key = (pair, engine)
+        if engine not in ("normal", "momentum"):
+            raise ValueError(f"Unknown strategy engine: {engine}")
         candle_ts = int(arr["time"][-1])
         # Update active signal outcomes on every fresh closed candle before deciding
         # whether this engine has already evaluated the candle.
