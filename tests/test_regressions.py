@@ -170,7 +170,12 @@ def test_persistent_signal_claim_blocks_restart_duplicate(tmp_path, monkeypatch)
                 await conn.run_sync(Base.metadata.create_all)
             signal = {"pair": "B-BTC_USDT", "engine": "normal", "direction": "LONG", "score": 8.0}
             assert await claim_signal_once(signal, 1_800_000, ttl_hours=4)
-            assert not await claim_signal_once(signal, 1_800_000, ttl_hours=4)
+            # A second engine must not send the same pair/direction/candle.
+            momentum_signal = {**signal, "engine": "momentum"}
+            assert not await claim_signal_once(momentum_signal, 1_800_000, ttl_hours=4)
+            # A genuinely new candle is not blocked by the previous candle's
+            # deduplication record, even while its record remains unexpired.
+            assert await claim_signal_once(signal, 2_100_000, ttl_hours=4)
         finally:
             database_db.engine, database_db.SessionLocal = old_engine, old_factory
             await test_engine.dispose()
