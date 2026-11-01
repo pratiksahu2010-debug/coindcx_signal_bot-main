@@ -14,12 +14,20 @@ from exchange.symbol_manager import SymbolManager
 from exchange.candle_builder import CandleBuilder
 from core.engine import SignalEngine
 from tgbot.bot import TelegramBot
+from database.db import init_db, dispose_db
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("=== CoinDCX Signal Bot v2.0 starting ===")
     start_time = datetime.now(timezone.utc)
+
+    database_ready = False
+    try:
+        await init_db()
+        database_ready = True
+    except Exception as exc:
+        logger.exception(f"Database initialization failed: {exc}")
 
     rest = CoinDCXRest()
     await rest.start()
@@ -56,7 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "valid_symbols_momentum": len(symbol_mgr.momentum_symbols),
         "scan_count": 0,
         "ws_reconnects": 0,
-        "database": "sqlite" if not settings.use_postgres else "postgres",
+        "database": ("postgres" if settings.use_postgres else "sqlite") if database_ready else "unavailable",
         "uptime_seconds": 0,
         "telegram": "ready" if tg.bot else "disabled",
     }
@@ -77,4 +85,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await engine.shutdown()
     await tg.stop()
     await rest.stop()
+    if database_ready:
+        await dispose_db()
     logger.info("Shutdown complete.")
