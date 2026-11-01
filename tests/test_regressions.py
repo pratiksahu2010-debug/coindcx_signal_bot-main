@@ -207,3 +207,8 @@ def test_15m_context_rejects_missing_or_too_old_history():
                                     base + 35 * 60 * 1000) is None
     assert latest_asof_candle_index([base], 15 * 60 * 1000,
                                     base + 35 * 60 * 1000) is None
+
+
+def test_rsi_is_neutral_for_a_flat_market():
+    from indicators.rsi import rsi
+    assert rsi(np.full(40, 100.0), 14) == 50.0
