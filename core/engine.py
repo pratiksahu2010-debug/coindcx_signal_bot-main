@@ -543,9 +543,34 @@ class SignalEngine:
                     self.signals[engine].invalidate(pair, engine, direction)
                     logger.warning(f"Signal suppressed: persistent duplicate/claim unavailable for {pair} {engine} {direction}")
                     return
+                # Recheck price and age after the durable DB claim, immediately
+                # before Telegram delivery; a slow DB write must not stale the entry.
+                if self.telegram:
+                    try:
+                        delivery_price = await self.rest.get_last_price(pair)
+                    except Exception as exc:
+                        delivery_price = None
+                        logger.warning(f"DELIVERY_PRICE_CHECK_FAILED {pair}: {exc}")
+                    delivery_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
+                    if (
+                        delivery_price is None
+                        or not is_entry_price_actionable(delivery_price, zone_low, zone_high)
+                        or delivery_age < 0
+                        or delivery_age > settings.max_signal_age_seconds
+                    ):
+                        self.signals[engine].invalidate(pair, engine, direction)
+                        logger.info(
+                            f"DELIVERY_STALE_SKIP {pair} engine={engine} price={delivery_price} "
+                            f"entry_zone={zone_low}-{zone_high} age_seconds={delivery_age:.1f}"
+                        )
+                        return
+                    signal["live_price"] = delivery_price
+                    signal["entry_checked_at"] = utc_iso(utc_now())
+                    signal["signal_age_seconds"] = round(delivery_age, 1)
+                    signal["timestamp"] = utc_iso(utc_now())
                 self.cooldowns[engine].set(pair, engine, direction)
-                logger.info(f"SIGNAL {result.grade} {direction} {pair} score={result.total} engine={engine} strategy={strategy} candle_open_ms={candle_ts} candle_close_ms={candle_close_ms} age_seconds={signal['signal_age_seconds']:.1f} confirm_15m_open_ms={signal.get('confirm_candle_time_ms')}")
-                # Push to Telegram only after durable claim succeeds.
+                logger.info(f"SIGNAL {result.grade} {direction} {pair} score={result.total} engine={engine} strategy={strategy} candle_open_ms={candle_ts} candle_close_ms={candle_close_ms} age_seconds={signal['signal_age_seconds']:.1f} live_price={signal.get('live_price')} confirm_15m_open_ms={signal.get('confirm_candle_time_ms')}")
+                # Push to Telegram only after durable claim and final price check.
                 if self.telegram:
                     try:
                         await self.telegram.send_signal(signal)
