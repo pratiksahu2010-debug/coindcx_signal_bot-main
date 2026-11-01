@@ -154,6 +154,8 @@ class TelegramBot:
             rr = risk.get("rr") or [0, 0, 0]
             lines += [
                 f"ENTRY: {_num(risk.get('entry'))}",
+                f"LIVE PRICE CHECK: {_num(signal.get('live_price'))}",
+                f"ENTRY CHECKED UTC: {signal.get('entry_checked_at', 'n/a')}",
                 f"ENTRY ZONE: {_num(ez[0])} – {_num(ez[1])}",
                 f"STOP LOSS: {_num(risk.get('stop_loss'))}",
                 f"TP1: {_num(risk.get('tp1'))}",
