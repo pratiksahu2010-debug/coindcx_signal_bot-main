@@ -26,6 +26,7 @@ async def init_db() -> None:
             url = "postgresql+asyncpg://" + url[len("postgres://"):]
         elif url.startswith("postgresql://"):
             url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+        url = url.replace("sslmode=require", "ssl=require")
         engine = create_async_engine(
             url,
             pool_size=2,
