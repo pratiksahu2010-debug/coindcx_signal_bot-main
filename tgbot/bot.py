@@ -1,9 +1,11 @@
 """Telegram bot integration — signal delivery + commands."""
 from typing import Optional, List, Any, Dict
+import asyncio
 import re
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
-from telegram.error import TelegramError
+from telegram.error import TelegramError, Conflict
+from sqlalchemy import text as sql_text
 
 from config import settings
 from utils.logger import logger
@@ -42,6 +44,10 @@ class TelegramBot:
         self.app: Optional[Application] = None
         self.bot: Optional[Bot] = None
         self.admin_ids: List[int] = settings.admin_ids
+        self.polling_active = False
+        self.polling_conflict = False
+        self._polling_lock_connection = None
+        self._polling_lock_id = 73190420261101
 
     async def start(self) -> None:
         if not self.token:
@@ -53,24 +59,102 @@ class TelegramBot:
             self._register_handlers()
             await self.app.initialize()
             await self.app.start()
-            try:
-                await self.app.updater.start_polling(drop_pending_updates=True)
-            except Exception as e:
-                logger.warning(f"Telegram polling note: {e}")
-            logger.info(f"Telegram bot started (admins: {self.admin_ids})")
+
+            # In production, Telegram polling is guarded by a PostgreSQL
+            # session-level advisory lock. The lock connection stays open for
+            # the entire polling lifetime, so a second Render service cannot
+            # poll with the same token while sharing the same database.
+            may_poll = not settings.is_production
+            if settings.use_postgres:
+                try:
+                    from database import db as database_db
+                    if database_db.engine is None:
+                        raise RuntimeError("database engine is not initialized")
+                    self._polling_lock_connection = await database_db.engine.connect()
+                    acquired = await self._polling_lock_connection.scalar(
+                        sql_text("SELECT pg_try_advisory_lock(:lock_id)"),
+                        {"lock_id": self._polling_lock_id},
+                    )
+                    may_poll = bool(acquired)
+                    if not may_poll:
+                        await self._polling_lock_connection.close()
+                        self._polling_lock_connection = None
+                        logger.warning("Telegram polling not started: another instance owns the PostgreSQL polling lock")
+                except Exception as lock_error:
+                    may_poll = False
+                    if self._polling_lock_connection is not None:
+                        await self._polling_lock_connection.close()
+                        self._polling_lock_connection = None
+                    logger.error(f"Telegram polling disabled because singleton lock could not be acquired: {lock_error}")
+            elif settings.is_production:
+                may_poll = False
+                logger.error("Telegram polling disabled in production: configure shared PostgreSQL DATABASE_URL for duplicate-instance protection")
+
+            if may_poll and self.app.updater:
+                try:
+                    await self.app.updater.start_polling(
+                        drop_pending_updates=True,
+                        error_callback=self._on_polling_error,
+                    )
+                    self.polling_active = True
+                except Conflict as exc:
+                    self.polling_conflict = True
+                    logger.error(f"Telegram polling conflict at startup; polling disabled: {exc}")
+                except Exception as exc:
+                    logger.error(f"Telegram polling failed to start: {exc}")
+            logger.info(
+                f"Telegram bot initialized (admins: {self.admin_ids}, "
+                f"polling: {'active' if self.polling_active else 'disabled'})"
+            )
         except Exception as e:
             logger.error(f"Telegram start failed: {e}")
             self.bot = None
 
+    def _on_polling_error(self, error: BaseException) -> None:
+        """Stop retry storms if Telegram reports another getUpdates consumer."""
+        if isinstance(error, Conflict):
+            self.polling_conflict = True
+            self.polling_active = False
+            logger.critical(
+                "Telegram getUpdates conflict detected. Polling is being stopped; "
+                "signal delivery remains available. Ensure only one service uses this token."
+            )
+            try:
+                asyncio.get_running_loop().create_task(self._stop_conflicted_poller())
+            except RuntimeError:
+                pass
+        else:
+            logger.warning(f"Telegram polling network error: {error}")
+
+    async def _stop_conflicted_poller(self) -> None:
+        try:
+            if self.app and self.app.updater and self.app.updater.running:
+                await self.app.updater.stop()
+        except Exception as exc:
+            logger.debug(f"Stopping conflicted Telegram poller: {exc}")
+
     async def stop(self) -> None:
         try:
-            if self.app and getattr(self.app, "updater", None):
+            if self.app and getattr(self.app, "updater", None) and self.app.updater.running:
                 await self.app.updater.stop()
-            if self.app:
+            self.polling_active = False
+            if self.app and self.app.running:
                 await self.app.stop()
+            if self.app:
                 await self.app.shutdown()
         except Exception as e:
             logger.debug(f"Telegram stop: {e}")
+        finally:
+            if self._polling_lock_connection is not None:
+                try:
+                    await self._polling_lock_connection.execute(
+                        sql_text("SELECT pg_advisory_unlock(:lock_id)"),
+                        {"lock_id": self._polling_lock_id},
+                    )
+                    await self._polling_lock_connection.close()
+                except Exception as exc:
+                    logger.warning(f"Telegram polling lock release note: {exc}")
+                self._polling_lock_connection = None
 
     def _register_handlers(self) -> None:
         assert self.app
