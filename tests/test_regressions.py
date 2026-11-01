@@ -219,3 +219,20 @@ def test_entry_price_must_remain_inside_planned_zone():
     assert is_entry_price_actionable(100.05, 99.85, 100.10)
     assert not is_entry_price_actionable(100.20, 99.85, 100.10)
     assert not is_entry_price_actionable(0, 99.85, 100.10)
+
+
+def test_ticker_price_lookup_matches_coin_dcx_pair_aliases():
+    import asyncio
+    from exchange.coindcx_rest import CoinDCXRest
+
+    async def run():
+        client = CoinDCXRest()
+        async def fake_ticker():
+            return [
+                {"market": "B-ETH_USDT", "last_price": "2500.5"},
+                {"market": "B-BTC_USDT", "last_price": "65000"},
+            ]
+        client.get_ticker = fake_ticker
+        assert await client.get_last_price("B-BTC_USDT") == 65000.0
+        assert await client.get_last_price("B-MISSING_USDT") is None
+    asyncio.run(run())
