@@ -1,5 +1,6 @@
 """Telegram bot integration — signal delivery + commands."""
 from typing import Optional, List, Any, Dict
+from datetime import datetime, timezone
 import asyncio
 import re
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
@@ -248,9 +249,10 @@ class TelegramBot:
             f"RSI: {_num(ind.get('rsi'), 2)} | ADX: {_num(ind.get('adx'), 2)}",
             f"ATR%: {_num(ind.get('atr_pct'), 3)} | RVOL: {_num(ind.get('rvol'), 2)}",
             f"MACD hist: {_num(ind.get('macd_hist'))}",
+            f"CANDLE OPEN UTC: {datetime.fromtimestamp(signal['candle_time_ms'] / 1000, tz=timezone.utc).isoformat() if signal.get('candle_time_ms') else 'n/a'}",
             "",
             "Signal only — no automated trading.",
-            f"{signal.get('timestamp', '')}",
+            f"SIGNAL GENERATED UTC: {signal.get('timestamp', '')}",
         ]
         return "\n".join(lines)
 
