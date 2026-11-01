@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from config import settings
 from utils.logger import logger
 from utils.time_utils import utc_iso, utc_now, parse_interval
-from core.candle_timing import candle_age_seconds, latest_asof_candle_index
+from core.candle_timing import candle_age_seconds, latest_asof_candle_index, seconds_until_next_candle_boundary
 from utils.memory_monitor import check_memory, safe_gc
 from exchange.coindcx_rest import CoinDCXRest
 from exchange.symbol_manager import SymbolManager
@@ -92,23 +92,38 @@ class SignalEngine:
     def set_telegram(self, tg) -> None:
         self.telegram = tg
 
+    async def _wait_for_next_primary_boundary(self) -> None:
+        interval_ms = int(parse_interval(settings.candle_primary_tf).total_seconds() * 1000)
+        grace_ms = max(0, int(settings.candle_close_grace_seconds)) * 1000
+        delay = seconds_until_next_candle_boundary(
+            int(utc_now().timestamp() * 1000), interval_ms, grace_ms
+        )
+        logger.info(
+            f"SCAN_BOUNDARY_WAIT timeframe={settings.candle_primary_tf} "
+            f"grace_seconds={grace_ms / 1000:.0f} wait_seconds={delay:.1f}"
+        )
+        if delay > 0:
+            await asyncio.sleep(delay)
+
     async def run_scan_loop(self, app: Any) -> None:
-        """Main background loop — respects free-tier constraints."""
-        # Initial warm-up
+        """Run one scan per completed primary-candle boundary."""
         await self._warmup()
+        await self._wait_for_next_primary_boundary()
 
         while self._running:
             try:
                 async with self._scan_lock:
                     start = utc_now()
+                    tasks = []
                     if settings.enable_normal_engine:
-                        await self._scan_normal()
+                        tasks.append(self._scan_normal())
                     if settings.enable_momentum_engine:
-                        await self._scan_momentum()
+                        tasks.append(self._scan_momentum())
+                    if tasks:
+                        await asyncio.gather(*tasks)
                     duration_ms = int((utc_now() - start).total_seconds() * 1000)
                     self.last_scan_time = utc_now()
 
-                    # Update app state
                     state = app.state.bot_state
                     state["last_scan"] = utc_iso(self.last_scan_time)
                     state["last_scan_duration_ms"] = duration_ms
@@ -134,12 +149,12 @@ class SignalEngine:
                     if mem["warning"]:
                         safe_gc()
 
-                await asyncio.sleep(settings.scan_interval_seconds)
+                await self._wait_for_next_primary_boundary()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.exception(f"Scan loop error: {e}")
-                await asyncio.sleep(30)
+                await self._wait_for_next_primary_boundary()
 
     async def _warmup(self) -> None:
         logger.info("Warming up candle buffers...")
