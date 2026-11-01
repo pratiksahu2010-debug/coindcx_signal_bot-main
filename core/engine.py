@@ -65,10 +65,21 @@ class SignalEngine:
         self.rest = rest
         self.symbols = symbols
         self.candles = candles
-        self.scoring = ScoringEngine()
-        self.cooldowns = CooldownManager(default_seconds=1800)
-        self.watchlist = WatchlistManager(max_entries=50, ttl_minutes=60)
-        self.signals = SignalManager(max_active=30, ttl_hours=4)
+        # Keep stateful components isolated per strategy engine.
+        self.normal_scoring = ScoringEngine()
+        self.momentum_scoring = ScoringEngine()
+        self.cooldowns = {
+            "normal": CooldownManager(default_seconds=1800),
+            "momentum": CooldownManager(default_seconds=1800),
+        }
+        self.watchlists = {
+            "normal": WatchlistManager(max_entries=50, ttl_minutes=60),
+            "momentum": WatchlistManager(max_entries=50, ttl_minutes=60),
+        }
+        self.signals = {
+            "normal": SignalManager(max_active=30, ttl_hours=4),
+            "momentum": SignalManager(max_active=30, ttl_hours=4),
+        }
         self._scan_lock = asyncio.Lock()
         self._running = True
         self.last_scan_time: Optional[datetime] = None
@@ -101,8 +112,8 @@ class SignalEngine:
                     state["last_scan"] = utc_iso(self.last_scan_time)
                     state["last_scan_duration_ms"] = duration_ms
                     state["scan_count"] = state.get("scan_count", 0) + 1
-                    state["active_signals"] = self.signals.count()
-                    state["watchlist_count"] = self.watchlist.count()
+                    state["active_signals"] = sum(manager.count() for manager in self.signals.values())
+                    state["watchlist_count"] = sum(manager.count() for manager in self.watchlists.values())
                     state["scan_errors_normal"] = self.scan_errors["normal"]
                     state["scan_errors_momentum"] = self.scan_errors["momentum"]
                     state["uptime_seconds"] = int(
@@ -332,7 +343,7 @@ class SignalEngine:
             strategy = detect_strategy(indicators, direction)
             if strategy == "UNCLASSIFIED":
                 return
-            result = self.scoring.score_normal(indicators, direction)
+            result = self.normal_scoring.score_normal(indicators, direction)
         else:
             # Momentum engine uses its own configured minimum trend-strength gate.
             if adx_v is None or adx_v < settings.momentum_adx_explosion:
@@ -399,12 +410,12 @@ class SignalEngine:
                 return
             if not indicators["not_chasing"] and not indicators["structure_break"]:
                 return
-            result = self.scoring.score_momentum(indicators, direction)
+            result = self.momentum_scoring.score_momentum(indicators, direction)
 
         if result.total < 7.0:
             return
 
-        if self.cooldowns.is_cooling(pair, engine, direction):
+        if self.cooldowns[engine].is_cooling(pair, engine, direction):
             return
 
         swing_low = float(np.min(low[-8:-1])) if len(low) >= 8 else None
@@ -444,7 +455,7 @@ class SignalEngine:
 
         if result.total >= max(7.0, settings.signal_threshold):
             self._last_processed.setdefault(engine, {})[pair] = candle_ts
-            if self.signals.add(signal):
+            if self.signals[engine].add(signal):
                 # Durable claim blocks duplicate alerts after a Render restart or
                 # a second worker sharing the same database.
                 try:
@@ -454,10 +465,10 @@ class SignalEngine:
                     logger.error(f"Persistent signal deduplication unavailable: {exc}")
                     claimed = False
                 if not claimed:
-                    self.signals.invalidate(pair, engine, direction)
+                    self.signals[engine].invalidate(pair, engine, direction)
                     logger.warning(f"Signal suppressed: persistent duplicate/claim unavailable for {pair} {engine} {direction}")
                     return
-                self.cooldowns.set(pair, engine, direction)
+                self.cooldowns[engine].set(pair, engine, direction)
                 logger.info(f"SIGNAL {result.grade} {direction} {pair} score={result.total} engine={engine} strategy={strategy}")
                 # Push to Telegram only after durable claim succeeds.
                 if self.telegram:
@@ -467,12 +478,12 @@ class SignalEngine:
                         logger.error(f"Telegram send error: {e}")
         elif result.total >= 6.0:
             self._last_processed.setdefault(engine, {})[pair] = candle_ts
-            self.watchlist.add(signal)
+            self.watchlists[engine].add(signal)
             logger.info(f"WATCHLIST {direction} {pair} score={result.total}")
 
     def _update_signal_outcomes(self, pair: str, engine: str, high: float, low: float) -> None:
         """Conservatively monitor active alerts; if SL and TP touch same bar, SL wins."""
-        for sig in self.signals.list_active(engine):
+        for sig in self.signals[engine].list_active():
             if sig.get("pair") != pair:
                 continue
             risk = sig.get("risk") or {}
@@ -482,12 +493,12 @@ class SignalEngine:
                 continue
             sl_hit = low <= sl if direction == "LONG" else high >= sl
             if sl_hit:
-                self.signals.mark_sl(pair, engine, direction)
+                self.signals[engine].mark_sl(pair, engine, direction)
                 continue
             hits = [i for i, target in enumerate((t1, t2, t3), 1)
                     if target is not None and (high >= target if direction == "LONG" else low <= target)]
             for level in hits:
-                self.signals.mark_tp(pair, engine, direction, level)
+                self.signals[engine].mark_tp(pair, engine, direction, level)
 
     async def shutdown(self) -> None:
         self._running = False
