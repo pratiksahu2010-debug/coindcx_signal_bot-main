@@ -37,7 +37,11 @@ async def claim_signal_once(signal: dict, candle_time_ms: int, ttl_hours: int = 
         logger.error("Persistent signal deduplication unavailable; suppressing alert")
         return False
 
-    key = f"{signal['pair']}:{signal['engine']}:{signal['direction']}"
+    # One alert per pair/direction/entry candle across BOTH engines.
+    # Including candle time avoids a four-hour lock suppressing legitimate
+    # signals on later candles, while excluding engine prevents cross-engine
+    # duplicates for the same market move.
+    key = f"{signal['pair']}:{signal['direction']}:{int(candle_time_ms)}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     expires = now + timedelta(hours=max(1, int(ttl_hours)))
     async with factory() as session:
