@@ -40,6 +40,9 @@ async def ping() -> Dict[str, Any]:
 async def status(request: Request) -> Dict[str, Any]:
     app_state = getattr(request.app.state, "bot_state", {})
     mem = check_memory()
+    telegram = getattr(request.app.state, "telegram", None)
+    telegram_polling = bool(getattr(telegram, "polling_active", False))
+    telegram_status = "polling" if telegram_polling else ("send_only" if getattr(telegram, "bot", None) else "disabled")
     return {
         "ok": True,
         "service": "coindcx-signal-bot",
@@ -58,8 +61,8 @@ async def status(request: Request) -> Dict[str, Any]:
         "valid_symbols_momentum": app_state.get("valid_symbols_momentum", 0),
         "memory_mb": mem["memory_mb"],
         "database": app_state.get("database", "unknown"),
-        "telegram": app_state.get("telegram", "unknown"),
-        "telegram_polling": app_state.get("telegram_polling", False),
+        "telegram": telegram_status,
+        "telegram_polling": telegram_polling,
         "eligible_symbols": app_state.get("eligible_symbols", 0),
         "skipped_symbols": app_state.get("skipped_symbols", 0),
     }
