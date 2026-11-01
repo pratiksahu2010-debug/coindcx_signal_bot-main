@@ -66,7 +66,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "ws_reconnects": 0,
         "database": ("postgres" if settings.use_postgres else "sqlite") if database_ready else "unavailable",
         "uptime_seconds": 0,
-        "telegram": "ready" if tg.bot else "disabled",
+        "telegram": "polling" if tg.polling_active else ("send_only" if tg.bot else "disabled"),
+        "telegram_polling": bool(tg.polling_active),
+        "eligible_symbols": len(symbol_mgr.valid_pairs),
+        "skipped_symbols": len(symbol_mgr.skipped_reasons),
     }
 
     scan_task = asyncio.create_task(engine.run_scan_loop(app))
