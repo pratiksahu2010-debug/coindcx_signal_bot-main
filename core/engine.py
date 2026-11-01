@@ -108,6 +108,7 @@ class SignalEngine:
     async def run_scan_loop(self, app: Any) -> None:
         """Run one scan per completed primary-candle boundary."""
         await self._warmup()
+        await self.symbols.refresh_universes()
         await self._wait_for_next_primary_boundary()
 
         while self._running:
@@ -121,6 +122,9 @@ class SignalEngine:
                         tasks.append(self._scan_momentum())
                     if tasks:
                         await asyncio.gather(*tasks)
+                    # Refresh independent Normal/Momentum top-N lists after the
+                    # scan has recorded any repeated stale candle-feed failures.
+                    await self.symbols.refresh_universes()
                     duration_ms = int((utc_now() - start).total_seconds() * 1000)
                     self.last_scan_time = utc_now()
 
