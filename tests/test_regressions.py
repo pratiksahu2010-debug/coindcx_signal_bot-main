@@ -212,3 +212,10 @@ def test_15m_context_rejects_missing_or_too_old_history():
 def test_rsi_is_neutral_for_a_flat_market():
     from indicators.rsi import rsi
     assert rsi(np.full(40, 100.0), 14) == 50.0
+
+
+def test_entry_price_must_remain_inside_planned_zone():
+    from core.risk_calculator import is_entry_price_actionable
+    assert is_entry_price_actionable(100.05, 99.85, 100.10)
+    assert not is_entry_price_actionable(100.20, 99.85, 100.10)
+    assert not is_entry_price_actionable(0, 99.85, 100.10)
