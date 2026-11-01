@@ -247,6 +247,7 @@ class SignalEngine:
         # 15m confirmation: require actual directional EMA alignment, price/VWAP
         # location, and EMA slope. Mere indicator availability is not confirmation.
         confirm_long = confirm_short = False
+        confirm_candle_time_ms = None
         conf_data = await self.rest.get_candles(pair, settings.candle_confirm_tf, limit=80)
         if conf_data and len(conf_data) >= 55:
             self.candles.seed(pair, settings.candle_confirm_tf, conf_data)
@@ -274,6 +275,7 @@ class SignalEngine:
                 c_vol = c_vol[:0]
                 c_times = c_times[:0]
             c_ema9, c_ema21, c_ema50 = ema(c_close, 9), ema(c_close, 21), ema(c_close, 50)
+            confirm_candle_time_ms = int(c_times[-1]) if c_times.size else None
             c_day_start = (int(c_times[-1]) // 86_400_000) * 86_400_000 if len(c_times) else 0
             c_day_idx = int(np.searchsorted(c_times, c_day_start, side="left")) if len(c_times) else 0
             c_vwap = (
@@ -432,6 +434,7 @@ class SignalEngine:
             valid_momentum_state = momentum_state in ("EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION")
             if (
                 not valid_momentum_state
+                or not indicators["confirm_15m"]
                 or not indicators["macd_direction_ok"]
                 or not indicators["di_direction_ok"]
                 or not indicators["directional_candle"]
@@ -470,7 +473,7 @@ class SignalEngine:
             "candle_time_ms": candle_ts,
             "candle_close_time_ms": candle_close_ms,
             "signal_age_seconds": round(candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms), 1),
-            "confirm_candle_time_ms": int(c_times[-1]) if c_times.size else None,
+            "confirm_candle_time_ms": confirm_candle_time_ms,
         }
         if risk:
             signal["risk"] = {
