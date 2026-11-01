@@ -59,11 +59,17 @@ if HAS_PYDANTIC:
 
         @property
         def is_production(self) -> bool:
-            return self.app_env.lower() == "production"
+            return (
+                self.app_env.lower() == "production"
+                or os.getenv("RENDER", "").lower() == "true"
+                or bool(os.getenv("RENDER_SERVICE_ID"))
+            )
 
         @property
         def use_postgres(self) -> bool:
-            return "postgresql" in self.database_url.lower()
+            return self.database_url.lower().startswith(
+                ("postgres://", "postgresql://", "postgresql+asyncpg://")
+            )
 else:
     class Settings:  # type: ignore
         def __init__(self):
@@ -103,11 +109,17 @@ else:
 
         @property
         def is_production(self) -> bool:
-            return self.app_env.lower() == "production"
+            return (
+                self.app_env.lower() == "production"
+                or os.getenv("RENDER", "").lower() == "true"
+                or bool(os.getenv("RENDER_SERVICE_ID"))
+            )
 
         @property
         def use_postgres(self) -> bool:
-            return "postgresql" in self.database_url.lower()
+            return self.database_url.lower().startswith(
+                ("postgres://", "postgresql://", "postgresql+asyncpg://")
+            )
 
 
 @lru_cache
