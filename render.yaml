@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: coindcx-signal-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SIGNAL_THRESHOLD
+        value: "7.0"
+      - key: CANDLE_PRIMARY_TF
+        value: "5m"
+      - key: CANDLE_CONFIRM_TF
+        value: "15m"
+      - key: ENABLE_WEBSOCKET
+        value: "false"
+      - key: ENABLE_NORMAL_ENGINE
+        value: "false"
+      - key: ENABLE_MOMENTUM_ENGINE
+        value: "false"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ADMIN_IDS
+        sync: false
+      - key: DATABASE_URL
+        sync: false

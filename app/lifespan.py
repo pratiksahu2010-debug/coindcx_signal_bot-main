@@ -1,0 +1,80 @@
+"""Application lifespan — startup / shutdown with graceful recovery."""
+import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import AsyncIterator
+
+from fastapi import FastAPI
+
+from config import settings
+from utils.logger import logger
+from utils.memory_monitor import check_memory
+from exchange.coindcx_rest import CoinDCXRest
+from exchange.symbol_manager import SymbolManager
+from exchange.candle_builder import CandleBuilder
+from core.engine import SignalEngine
+from tgbot.bot import TelegramBot
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    logger.info("=== CoinDCX Signal Bot v2.0 starting ===")
+    start_time = datetime.now(timezone.utc)
+
+    rest = CoinDCXRest()
+    await rest.start()
+
+    symbol_mgr = SymbolManager(rest)
+    try:
+        await symbol_mgr.load_and_validate()
+    except Exception as e:
+        logger.error(f"Symbol validation failed: {e}")
+
+    candle_builder = CandleBuilder()
+    engine = SignalEngine(rest, symbol_mgr, candle_builder)
+
+    # Telegram
+    tg = TelegramBot()
+    await tg.start()
+    engine.set_telegram(tg)
+
+    app.state.rest = rest
+    app.state.symbol_mgr = symbol_mgr
+    app.state.candle_builder = candle_builder
+    app.state.engine = engine
+    app.state.telegram = tg
+    app.state.start_time = start_time
+    app.state.bot_state = {
+        "websocket_status": "disabled_rest_mode" if not settings.enable_websocket else "configured_but_not_started",
+        "normal_engine": "starting" if settings.enable_normal_engine else "disabled",
+        "momentum_engine": "starting" if settings.enable_momentum_engine else "disabled",
+        "last_market_update": None,
+        "last_scan": None,
+        "active_signals": 0,
+        "watchlist_count": 0,
+        "valid_symbols_normal": len(symbol_mgr.normal_symbols),
+        "valid_symbols_momentum": len(symbol_mgr.momentum_symbols),
+        "scan_count": 0,
+        "ws_reconnects": 0,
+        "database": "sqlite" if not settings.use_postgres else "postgres",
+        "uptime_seconds": 0,
+        "telegram": "ready" if tg.bot else "disabled",
+    }
+
+    scan_task = asyncio.create_task(engine.run_scan_loop(app))
+
+    logger.info("Startup complete. Engines ready.")
+    check_memory()
+
+    yield
+
+    logger.info("Shutting down...")
+    scan_task.cancel()
+    try:
+        await scan_task
+    except asyncio.CancelledError:
+        pass
+    await engine.shutdown()
+    await tg.stop()
+    await rest.stop()
+    logger.info("Shutdown complete.")
