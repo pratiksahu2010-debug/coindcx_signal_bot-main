@@ -25,6 +25,31 @@ class SymbolManager:
         value = re.sub(r"^(B-|I-)", "", value)
         return re.sub(r"[^A-Z0-9]", "", value)
 
+    # USDT-quoted stablecoin pairs have no meaningful directional edge for
+    # this momentum/trend scanner. Keep this list exact (not substring-based)
+    # to avoid accidentally excluding ordinary assets with similar names.
+    STABLECOIN_BASES = {
+        "USDC", "BUSD", "FDUSD", "TUSD", "DAI", "USDE", "USDS",
+        "PYUSD", "USDP", "USD1", "UST", "USTC", "USDD", "FRAX",
+        "GUSD", "LUSD", "MIM", "CRVUSD", "EURC", "EURS",
+    }
+
+    @classmethod
+    def _stablecoin_base(cls, pair: str, target: str = "") -> str:
+        if target:
+            return cls._norm(target)
+        normalized = str(pair or "").upper().strip()
+        normalized = re.sub(r"^(B-|I-)", "", normalized)
+        if normalized.endswith("_USDT"):
+            return cls._norm(normalized[:-5])
+        if normalized.endswith("USDT"):
+            return cls._norm(normalized[:-4])
+        return ""
+
+    @classmethod
+    def _is_stablecoin_pair(cls, pair: str, target: str = "") -> bool:
+        return cls._stablecoin_base(pair, target) in cls.STABLECOIN_BASES
+
     @staticmethod
     def _as_positive(value: object) -> float:
         try:
@@ -135,6 +160,9 @@ class SymbolManager:
             pair = pair.upper()
             if not pair.endswith("_USDT"):
                 continue
+            if self._is_stablecoin_pair(pair, target):
+                self.skipped_reasons[pair] = "stablecoin-to-USDT pair excluded from directional scanning"
+                continue
             self.valid_pairs.add(pair)
             self.metadata[pair] = market
             display = f"{target}/USDT" if target else pair.removeprefix("B-").removeprefix("I-").replace("_", "/")
@@ -144,7 +172,10 @@ class SymbolManager:
             volume = max((ticker_liquidity.get(self._norm(x), 0.0) for x in aliases), default=0.0)
             self.liquidity[pair] = volume
 
-        logger.info(f"Loaded {len(self.valid_pairs)} active USDT markets from CoinDCX")
+        logger.info(
+            f"Loaded {len(self.valid_pairs)} eligible active USDT markets from CoinDCX "
+            f"(stablecoin pairs excluded: {sum('stablecoin-to-USDT pair' in reason for reason in self.skipped_reasons.values())})"
+        )
 
         normal_preferences = self._load_yaml("config/normal_symbols.yaml")
         momentum_preferences = self._load_yaml("config/momentum_symbols.yaml")
