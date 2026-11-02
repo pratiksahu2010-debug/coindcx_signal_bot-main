@@ -160,6 +160,11 @@ class SignalEngine:
         # a separate serial warmup duplicated REST calls and delayed the first scan.
         await self.symbols.refresh_universes()
 
+        # A Render restart can occur mid-candle. Do not spend the first scan
+        # fetching a full universe only to reject every bar as older than the
+        # 120-second signal-age limit. Start on the next usable close boundary.
+        await self._wait_for_next_primary_boundary()
+
         tasks = []
         if settings.enable_normal_engine:
             tasks.append(asyncio.create_task(self._run_engine_loop(app, "normal")))
@@ -175,6 +180,12 @@ class SignalEngine:
 
         while self._running:
             try:
+                # Apply stale-feed quarantine before selecting the next scan's
+                # symbols. The other engine may have observed the second stale
+                # response during its previous cycle.
+                self.symbols._refresh_quarantine_from_rest()
+                self.symbols._select_active_symbols()
+
                 start = utc_now()
                 if engine == "normal":
                     await self._scan_normal()
