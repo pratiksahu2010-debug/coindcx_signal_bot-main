@@ -25,6 +25,15 @@ from indicators import (
 import numpy as np
 
 
+def _score_disposition(score: float, signal_threshold: float) -> str:
+    """Classify scores without allowing watchlist scores to become alerts."""
+    if score >= max(7.0, signal_threshold):
+        return "SIGNAL"
+    if score >= 6.0:
+        return "WATCHLIST"
+    return "REJECT"
+
+
 def _macd_hist_history(closes: Any, points: int = 4) -> List[float]:
     """Return recent MACD histogram observations.
 
@@ -568,7 +577,8 @@ class SignalEngine:
                 "invalidation": risk.invalidation,
             }
 
-        if result.total >= max(7.0, settings.signal_threshold):
+        disposition = _score_disposition(result.total, settings.signal_threshold)
+        if disposition == "SIGNAL":
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
                 confirm_candle_time_ms, indicators, "CANDIDATE",
@@ -658,7 +668,7 @@ class SignalEngine:
                         await self.telegram.send_signal(signal)
                     except Exception as e:
                         logger.error(f"Telegram send error: {e}")
-        elif result.total >= 6.0:
+        elif disposition == "WATCHLIST":
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
                 confirm_candle_time_ms, indicators, "WATCHLIST",
