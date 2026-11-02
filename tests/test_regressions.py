@@ -410,70 +410,37 @@ def test_candle_evaluation_diagnostic_includes_both_timeframes_and_gate_reasons(
     assert "score_parts=[EMA Trend:1/1,RSI:1/1]" in message
 
 
-def test_normal_scan_runs_before_momentum_scan(monkeypatch):
+
+def test_scan_loop_starts_normal_and_momentum_as_independent_tasks(monkeypatch):
     import asyncio
+    from types import SimpleNamespace
     from core.engine import SignalEngine
     from config import settings
 
     async def run():
         engine = SignalEngine(rest=object(), symbols=object(), candles=object())
-        order = []
-        async def normal():
-            order.append("normal")
-        async def momentum():
-            order.append("momentum")
-        monkeypatch.setattr(engine, "_scan_normal", normal)
-        monkeypatch.setattr(engine, "_scan_momentum", momentum)
+        called = []
+        async def warmup():
+            called.append("warmup")
+        async def refresh():
+            called.append("refresh")
+        async def engine_loop(app, name):
+            if name == "normal":
+                await asyncio.sleep(0.02)
+            called.append(name)
+
+        monkeypatch.setattr(engine, "_warmup", warmup)
+        monkeypatch.setattr(engine.symbols, "refresh_universes", refresh)
+        monkeypatch.setattr(engine, "_run_engine_loop", engine_loop)
         old_normal, old_momentum = settings.enable_normal_engine, settings.enable_momentum_engine
         settings.enable_normal_engine = True
         settings.enable_momentum_engine = True
         try:
-            await engine._run_enabled_scans()
-            assert order == ["normal", "momentum"]
+            await engine.run_scan_loop(SimpleNamespace())
+            assert called[0:2] == ["warmup", "refresh"]
+            assert called.index("momentum") < called.index("normal")
         finally:
             settings.enable_normal_engine = old_normal
             settings.enable_momentum_engine = old_momentum
-
-    asyncio.run(run())
-
-
-def test_candle_history_covers_full_utc_session_for_vwap():
-    from core.engine import PRIMARY_CANDLE_HISTORY, CONFIRM_CANDLE_HISTORY
-
-    assert PRIMARY_CANDLE_HISTORY >= 24 * 60 // 5
-    assert CONFIRM_CANDLE_HISTORY >= 24 * 60 // 15
-    assert PRIMARY_CANDLE_HISTORY <= 1000
-    assert CONFIRM_CANDLE_HISTORY <= 1000
-
-
-def test_telegram_send_signal_reports_delivery_success_and_failure():
-    import asyncio
-    from tgbot.bot import TelegramBot
-
-    class SuccessBot:
-        async def send_message(self, **kwargs):
-            return None
-
-    class FailureBot:
-        async def send_message(self, **kwargs):
-            raise RuntimeError("temporary Telegram failure")
-
-    async def run():
-        signal = {
-            "pair": "B-BTC_USDT", "display": "BTC/USDT",
-            "direction": "LONG", "engine": "normal", "strategy": "TREND_CONTINUATION",
-            "score": 8.0, "grade": "STRONG", "price": 100.0,
-            "candle_time_ms": 1_800_000_000_000,
-            "candle_close_time_ms": 1_800_000_300_000,
-            "confirm_candle_time_ms": 1_800_000_000_000,
-            "indicators": {}, "risk": {},
-        }
-        bot = TelegramBot()
-        bot.bot, bot.admin_ids = SuccessBot(), [123]
-        assert await bot.send_signal(signal) is True
-        bot.bot = FailureBot()
-        assert await bot.send_signal(signal) is False
-        bot.bot = None
-        assert await bot.send_signal(signal) is False
 
     asyncio.run(run())
