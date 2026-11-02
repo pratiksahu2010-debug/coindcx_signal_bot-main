@@ -251,6 +251,10 @@ class SymbolManager:
         self.normal_symbols = [p for p in self._ranked_normal if p not in excluded][:max(1, int(settings.normal_symbol_limit))]
         self.momentum_symbols = [p for p in self._ranked_momentum if p not in excluded][:max(1, int(settings.momentum_symbol_limit))]
         selected = set(self.normal_symbols) | set(self.momentum_symbols)
+        # A recovered market may re-enter the active universe; clear its old
+        # quarantine/out-of-universe reason before rebuilding current skip state.
+        for pair in selected:
+            self.skipped_reasons.pop(pair, None)
         for pair, item in self._quarantined.items():
             retry_at = datetime.fromtimestamp(item["retry_at"], tz=timezone.utc).isoformat()
             self.skipped_reasons[pair] = f"temporarily quarantined until {retry_at}: {item['reason']}"
