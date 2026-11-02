@@ -42,12 +42,6 @@ if HAS_PYDANTIC:
         enable_websocket: bool = Field(default=False, alias="ENABLE_WEBSOCKET")
         enable_normal_engine: bool = Field(default=True, alias="ENABLE_NORMAL_ENGINE")
         enable_momentum_engine: bool = Field(default=True, alias="ENABLE_MOMENTUM_ENGINE")
-        enable_signals_engine: bool = Field(default=True, alias="ENABLE_SIGNALS_ENGINE")
-        signals_max_cross_age: int = Field(default=3, alias="SIGNALS_MAX_CROSS_AGE")
-        signals_adx_min: float = Field(default=25.0, alias="SIGNALS_ADX_MIN")
-        signals_max_vwap_extension_atr: float = Field(default=1.5, alias="SIGNALS_MAX_VWAP_EXTENSION_ATR")
-        signals_max_channel_extension_atr: float = Field(default=3.0, alias="SIGNALS_MAX_CHANNEL_EXTENSION_ATR")
-        use_15m_context: bool = Field(default=True, alias="USE_15M_CONTEXT")
         memory_warning_mb: int = Field(default=400, alias="MEMORY_WARNING_MB")
         normal_adx_min: float = Field(default=25.0, alias="NORMAL_ADX_MIN")
         momentum_adx_explosion: float = Field(default=18.0, alias="MOMENTUM_ADX_MIN")
@@ -99,12 +93,6 @@ else:
             self.enable_websocket = os.getenv("ENABLE_WEBSOCKET", "false").lower() == "true"
             self.enable_normal_engine = os.getenv("ENABLE_NORMAL_ENGINE", "true").lower() == "true"
             self.enable_momentum_engine = os.getenv("ENABLE_MOMENTUM_ENGINE", "true").lower() == "true"
-            self.enable_signals_engine = os.getenv("ENABLE_SIGNALS_ENGINE", "true").lower() == "true"
-            self.signals_max_cross_age = int(os.getenv("SIGNALS_MAX_CROSS_AGE", "3"))
-            self.signals_adx_min = float(os.getenv("SIGNALS_ADX_MIN", "25.0"))
-            self.signals_max_vwap_extension_atr = float(os.getenv("SIGNALS_MAX_VWAP_EXTENSION_ATR", "1.5"))
-            self.signals_max_channel_extension_atr = float(os.getenv("SIGNALS_MAX_CHANNEL_EXTENSION_ATR", "3.0"))
-            self.use_15m_context = os.getenv("USE_15M_CONTEXT", "true").lower() == "true"
             self.memory_warning_mb = int(os.getenv("MEMORY_WARNING_MB", "400"))
             self.normal_adx_min = float(os.getenv("NORMAL_ADX_MIN", "25.0"))
             self.momentum_adx_explosion = float(os.getenv("MOMENTUM_ADX_MIN", "18.0"))
