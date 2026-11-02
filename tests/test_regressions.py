@@ -549,3 +549,29 @@ def test_active_signal_persistence_restore_and_terminal_update(tmp_path):
             await test_engine.dispose()
 
     asyncio.run(run())
+
+
+def test_tp_outcome_is_persisted_only_once_per_target(monkeypatch):
+    import asyncio
+    from core.engine import SignalEngine
+    from database import repositories
+
+    async def run():
+        engine = SignalEngine(rest=object(), symbols=object(), candles=object())
+        signal = {
+            "pair": "B-BTC_USDT", "engine": "normal", "direction": "LONG",
+            "score": 8.0, "risk": {
+                "stop_loss": 95.0, "tp1": 105.0, "tp2": 110.0, "tp3": 115.0,
+            },
+        }
+        assert engine.signals["normal"].add(signal)
+        calls = []
+        async def persist(item, status):
+            calls.append((status, item.get("tp1_hit")))
+            return True
+        monkeypatch.setattr(repositories, "update_signal_record", persist)
+        await engine._update_signal_outcomes("B-BTC_USDT", "normal", high=106.0, low=99.0)
+        await engine._update_signal_outcomes("B-BTC_USDT", "normal", high=106.0, low=99.0)
+        assert calls == [("active", True)]
+
+    asyncio.run(run())
