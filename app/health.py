@@ -38,7 +38,7 @@ async def health(request: Request):
                 content={"ok": False, "status": "degraded", "database": database,
                          "normal_engine": state.get("normal_engine"),
                          "momentum_engine": state.get("momentum_engine"),
-                         "signals_engine": state.get("signals_engine")},
+                         "momentum_engine": state.get("momentum_engine")},
             )
     return {"ok": True, "status": "healthy"}
 
