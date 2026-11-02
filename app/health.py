@@ -31,13 +31,15 @@ async def health(request: Request):
         enabled = (
             (settings.enable_normal_engine and state.get("normal_engine") == "paused_database_unavailable")
             or (settings.enable_momentum_engine and state.get("momentum_engine") == "paused_database_unavailable")
+            or (settings.enable_signals_engine and state.get("signals_engine") == "paused_database_unavailable")
         )
         if database == "unavailable" or enabled:
             return JSONResponse(
                 status_code=503,
                 content={"ok": False, "status": "degraded", "database": database,
                          "normal_engine": state.get("normal_engine"),
-                         "momentum_engine": state.get("momentum_engine")},
+                         "momentum_engine": state.get("momentum_engine"),
+                         "signals_engine": state.get("signals_engine")},
             )
     return {"ok": True, "status": "healthy"}
 
@@ -64,11 +66,14 @@ async def status(request: Request) -> Dict[str, Any]:
         "last_market_update": app_state.get("last_market_update"),
         "normal_engine": app_state.get("normal_engine", "unknown"),
         "momentum_engine": app_state.get("momentum_engine", "unknown"),
+        "signals_engine": app_state.get("signals_engine", "unknown"),
+        "scan_errors_signals": app_state.get("scan_errors_signals", 0),
         "last_scan": app_state.get("last_scan"),
         "active_signals": app_state.get("active_signals", 0),
         "watchlist_count": app_state.get("watchlist_count", 0),
         "scan_errors_normal": app_state.get("scan_errors_normal", 0),
         "scan_errors_momentum": app_state.get("scan_errors_momentum", 0),
+        "scan_errors_signals": app_state.get("scan_errors_signals", 0),
         "valid_symbols_normal": app_state.get("valid_symbols_normal", 0),
         "valid_symbols_momentum": app_state.get("valid_symbols_momentum", 0),
         "memory_mb": mem["memory_mb"],
