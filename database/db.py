@@ -1,6 +1,7 @@
 """Database session management — PostgreSQL preferred, SQLite for local."""
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy import text
 
 from config import settings
 from utils.logger import logger
@@ -52,7 +53,12 @@ async def init_db() -> None:
     SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database initialized")
+        # Remove persisted state belonging only to the retired Phase 3 engine.
+        await conn.execute(text("DELETE FROM signals WHERE engine = 'signals'"))
+        await conn.execute(text("DELETE FROM watchlist WHERE engine = 'signals'"))
+        await conn.execute(text("DELETE FROM signal_dedup WHERE dedup_key LIKE 'signals:%'"))
+        await conn.execute(text("DROP TABLE IF EXISTS step_channel_state"))
+    logger.info("Database initialized; obsolete Phase 3 state removed")
 
 
 async def get_session() -> AsyncSession:
