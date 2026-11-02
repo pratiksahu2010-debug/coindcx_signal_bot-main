@@ -425,6 +425,11 @@ class SignalEngine:
         else:
             # Momentum engine uses its own configured minimum trend-strength gate.
             if adx_v is None or adx_v < settings.momentum_adx_explosion:
+                self._log_candle_evaluation(
+                    pair, engine, direction, candle_ts, candle_close_ms,
+                    confirm_candle_time_ms, indicators, "REJECT",
+                    failed=["momentum_adx_min"], strategy="NOT_EVALUATED",
+                )
                 return
             # Momentum extras
             bb = bollinger_bands(close, 20, 2.0)
@@ -501,11 +506,11 @@ class SignalEngine:
         score_parts = ",".join(
             f"{c.name}:{c.points:g}/{c.max_points:g}" for c in result.components
         )
-        if result.total < 7.0:
+        if result.total < 6.0:
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
                 confirm_candle_time_ms, indicators, "REJECT",
-                failed=[f"score_below_7({result.total:.2f})"], strategy=strategy,
+                failed=[f"score_below_watchlist_min({result.total:.2f})"], strategy=strategy,
                 score=result.total, score_parts=score_parts,
             )
             return
