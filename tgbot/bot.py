@@ -2,7 +2,7 @@
 from typing import Optional, List, Any, Dict
 from datetime import datetime, timezone
 import re
-from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
 
@@ -185,42 +185,25 @@ class TelegramBot:
         ]
         return "\n".join(lines)
 
-    def _keyboard(self, signal: Dict[str, Any]) -> InlineKeyboardMarkup:
-        pair = signal.get("pair", "")[:40]
-        return InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📊 Details", callback_data=f"det:{pair}"),
-                InlineKeyboardButton("🎯 Targets", callback_data=f"tgt:{pair}"),
-            ],
-            [
-                InlineKeyboardButton("✅ TP1", callback_data=f"tp1:{pair}"),
-                InlineKeyboardButton("✅ TP2", callback_data=f"tp2:{pair}"),
-            ],
-            [
-                InlineKeyboardButton("✅ TP3", callback_data=f"tp3:{pair}"),
-                InlineKeyboardButton("🛑 SL Hit", callback_data=f"sl:{pair}"),
-            ],
-        ])
-
-    async def send_signal(self, signal: Dict[str, Any]) -> None:
-        """Broadcast signal to all admin chat IDs (plain text — no Markdown parse errors)."""
+    async def send_signal(self, signal: Dict[str, Any]) -> bool:
+        """Push a signal to configured admins; return True if at least one delivery succeeds."""
         if not self.bot:
             logger.warning("Telegram bot not ready — signal not sent")
-            return
+            return False
         if not self.admin_ids:
             logger.warning("TELEGRAM_ADMIN_IDS empty — no recipients")
-            return
+            return False
         text = self.format_signal(signal)
-        markup = self._keyboard(signal)
+        success_count = 0
         for chat_id in self.admin_ids:
             try:
                 await self.bot.send_message(
                     chat_id=chat_id,
                     text=text,
-                    parse_mode=None,  # plain text — avoids entity parse errors
-                    reply_markup=markup,
+                    parse_mode=None,
                     disable_web_page_preview=True,
                 )
+                success_count += 1
                 logger.info(
                     f"Telegram signal sent to {chat_id}: "
                     f"{signal.get('pair')} {signal.get('direction')}"
@@ -229,3 +212,4 @@ class TelegramBot:
                 logger.error(f"Telegram send failed to {chat_id}: {e}")
             except Exception as e:
                 logger.error(f"Telegram unexpected error to {chat_id}: {e}")
+        return success_count > 0
