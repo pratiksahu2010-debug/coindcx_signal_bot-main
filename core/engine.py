@@ -370,6 +370,13 @@ class SignalEngine:
                 direction = "SHORT"
 
         if not direction:
+            logger.info(
+                f"CANDLE_EVAL pair={pair} engine={engine} direction=NONE "
+                f"decision=REJECT reason=direction_alignment "
+                f"candle_open_ms={candle_ts} candle_close_ms={candle_close_ms} "
+                f"close={float(close[-1]):.8g} ema9={ema9} ema21={ema21} vwap={vwap_v} "
+                f"body={signed_body:.8g}"
+            )
             return
         indicators["macd_direction_ok"] = bool(
             macd_hist is not None and (
@@ -393,22 +400,26 @@ class SignalEngine:
             (direction == "SHORT" and close_location <= 0.35 and signed_body < 0))
 
         if engine == "normal":
-            # Mandatory ADX filter
-            if adx_v is None or adx_v < settings.normal_adx_min:
-                return
-            # Hard quality gates prevent a high score from compensating for bad context.
-            if (
-                not indicators["confirm_15m"]
-                or not indicators["di_direction_ok"]
-                or not indicators["macd_direction_ok"]
-            ):
-                return
-            if not indicators["adx_rising"] and (adx_v is None or adx_v < 30):
-                return
-            if not indicators["not_chasing"] or not indicators["directional_candle"]:
-                return
+            # Evaluate strategy and every hard gate before returning so a missed
+            # early setup can be reconstructed from one candle-level diagnostic.
             strategy = detect_strategy(indicators, direction)
-            if strategy == "UNCLASSIFIED":
+            gates = {
+                "adx_min": adx_v is not None and adx_v >= settings.normal_adx_min,
+                "confirm_15m": bool(indicators["confirm_15m"]),
+                "di_direction": bool(indicators["di_direction_ok"]),
+                "macd_direction": bool(indicators["macd_direction_ok"]),
+                "adx_rising_or_30": bool(indicators["adx_rising"] or (adx_v is not None and adx_v >= 30)),
+                "not_chasing": bool(indicators["not_chasing"]),
+                "directional_candle": bool(indicators["directional_candle"]),
+                "strategy_classified": strategy != "UNCLASSIFIED",
+            }
+            failed = [name for name, passed in gates.items() if not passed]
+            if failed:
+                self._log_candle_evaluation(
+                    pair, engine, direction, candle_ts, candle_close_ms,
+                    confirm_candle_time_ms, indicators, "REJECT", failed=failed,
+                    strategy=strategy,
+                )
                 return
             result = self.normal_scoring.score_normal(indicators, direction)
         else:
@@ -468,22 +479,44 @@ class SignalEngine:
             # Momentum must be a directional expansion, not merely a high score.
             momentum_state = detect_momentum_state(indicators)
             valid_momentum_state = momentum_state in ("EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION")
-            if (
-                not valid_momentum_state
-                or not indicators["confirm_15m"]
-                or not indicators["macd_direction_ok"]
-                or not indicators["di_direction_ok"]
-                or not indicators["directional_candle"]
-            ):
-                return
-            if not indicators["not_chasing"] and not indicators["structure_break"]:
+            momentum_gates = {
+                "momentum_state": valid_momentum_state,
+                "confirm_15m": bool(indicators["confirm_15m"]),
+                "macd_direction": bool(indicators["macd_direction_ok"]),
+                "di_direction": bool(indicators["di_direction_ok"]),
+                "directional_candle": bool(indicators["directional_candle"]),
+                "not_chasing_or_structure_break": bool(indicators["not_chasing"] or indicators["structure_break"]),
+            }
+            failed = [name for name, passed in momentum_gates.items() if not passed]
+            if failed:
+                self._log_candle_evaluation(
+                    pair, engine, direction, candle_ts, candle_close_ms,
+                    confirm_candle_time_ms, indicators, "REJECT", failed=failed,
+                    strategy=momentum_state,
+                )
                 return
             result = self.momentum_scoring.score_momentum(indicators, direction)
+            strategy = momentum_state
 
+        score_parts = ",".join(
+            f"{c.name}:{c.points:g}/{c.max_points:g}" for c in result.components
+        )
         if result.total < 7.0:
+            self._log_candle_evaluation(
+                pair, engine, direction, candle_ts, candle_close_ms,
+                confirm_candle_time_ms, indicators, "REJECT",
+                failed=[f"score_below_7({result.total:.2f})"], strategy=strategy,
+                score=result.total, score_parts=score_parts,
+            )
             return
 
         if self.cooldowns[engine].is_cooling(pair, engine, direction):
+            self._log_candle_evaluation(
+                pair, engine, direction, candle_ts, candle_close_ms,
+                confirm_candle_time_ms, indicators, "REJECT",
+                failed=["cooldown"], strategy=strategy, score=result.total,
+                score_parts=score_parts,
+            )
             return
 
         swing_low = float(np.min(low[-8:-1])) if len(low) >= 8 else None
@@ -492,6 +525,12 @@ class SignalEngine:
                               swing_low=swing_low, swing_high=swing_high) if atr_v else None
         strategy = strategy if engine == "normal" else momentum_state
         if not risk or min(risk.rr1, risk.rr2, risk.rr3) < 1.0:
+            self._log_candle_evaluation(
+                pair, engine, direction, candle_ts, candle_close_ms,
+                confirm_candle_time_ms, indicators, "REJECT",
+                failed=["risk_or_rr_invalid"], strategy=strategy,
+                score=result.total, score_parts=score_parts,
+            )
             return
 
         signal = {
@@ -525,6 +564,12 @@ class SignalEngine:
             }
 
         if result.total >= max(7.0, settings.signal_threshold):
+            self._log_candle_evaluation(
+                pair, engine, direction, candle_ts, candle_close_ms,
+                confirm_candle_time_ms, indicators, "CANDIDATE",
+                failed=[], strategy=strategy, score=result.total,
+                score_parts=score_parts,
+            )
             # Recheck immediately before claiming/sending: the scan may have
             # taken long enough for this otherwise-valid candle to go stale.
             final_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
@@ -609,9 +654,51 @@ class SignalEngine:
                     except Exception as e:
                         logger.error(f"Telegram send error: {e}")
         elif result.total >= 6.0:
+            self._log_candle_evaluation(
+                pair, engine, direction, candle_ts, candle_close_ms,
+                confirm_candle_time_ms, indicators, "WATCHLIST",
+                failed=[f"signal_threshold({settings.signal_threshold:g})"],
+                strategy=strategy, score=result.total, score_parts=score_parts,
+            )
             self._last_processed.setdefault(engine, {})[pair] = candle_ts
             self.watchlists[engine].add(signal)
             logger.info(f"WATCHLIST {direction} {pair} score={result.total}")
+
+    def _log_candle_evaluation(
+        self, pair: str, engine: str, direction: str, candle_ts: int,
+        candle_close_ms: int, confirm_candle_time_ms: Optional[int],
+        indicators: Dict[str, Any], decision: str, failed: List[str],
+        strategy: str, score: Optional[float] = None,
+        score_parts: str = "",
+    ) -> None:
+        """Emit a compact, timestamped audit trail for each directional candidate."""
+        def value(name: str) -> str:
+            item = indicators.get(name)
+            if item is None:
+                return "NA"
+            if isinstance(item, (float, np.floating)):
+                return f"{float(item):.5g}"
+            return str(item)
+
+        age = candle_age_seconds(
+            int(utc_now().timestamp() * 1000), candle_ts,
+            int(parse_interval(settings.candle_primary_tf).total_seconds() * 1000),
+        )
+        logger.info(
+            f"CANDLE_EVAL pair={pair} engine={engine} direction={direction} "
+            f"decision={decision} strategy={strategy} "
+            f"candle_open_ms={candle_ts} candle_close_ms={candle_close_ms} "
+            f"confirm_15m_open_ms={confirm_candle_time_ms} age_seconds={age:.1f} "
+            f"close={value('close')} ema9={value('ema9')} ema21={value('ema21')} "
+            f"ema50={value('ema50')} vwap={value('vwap')} rsi={value('rsi')} "
+            f"adx={value('adx')} plus_di={value('plus_di')} minus_di={value('minus_di')} "
+            f"macd_hist={value('macd_hist')} rvol={value('rvol')} atr_pct={value('atr_pct')} "
+            f"ema_extension_atr={value('ema_extension_atr')} "
+            f"confirm_15m={value('confirm_15m')} adx_rising={value('adx_rising')} "
+            f"directional_candle={value('directional_candle')} "
+            f"score={score if score is not None else 'NA'} "
+            f"score_parts=[{score_parts}] failed={','.join(failed) if failed else 'none'}"
+        )
 
     def _update_signal_outcomes(self, pair: str, engine: str, high: float, low: float) -> None:
         """Conservatively monitor active alerts; if SL and TP touch same bar, SL wins."""
