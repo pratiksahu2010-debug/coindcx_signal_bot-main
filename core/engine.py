@@ -475,6 +475,9 @@ class SignalEngine:
             logger.warning(f"SIGNALS_NOT_DELIVERED {pair}; no cooldown started")
 
     async def _process_pair(self, pair: str, engine: str) -> None:
+        if engine == "signals":
+            await self._process_signals_pair(pair)
+            return
         # Refresh primary TF candles
         primary = settings.candle_primary_tf
         data = await self.rest.get_candles(pair, primary, limit=PRIMARY_CANDLE_HISTORY)
