@@ -120,48 +120,72 @@ class SignalEngine:
             await asyncio.sleep(delay)
 
     async def run_scan_loop(self, app: Any) -> None:
-        """Run one scan per completed primary-candle boundary."""
+        """Run Normal and Momentum on independent candle-boundary schedules.
+
+        A long Momentum universe scan must never hold up the next Normal scan.
+        Each engine owns its own loop and cursor while sharing the bounded REST
+        client and the same completed-candle/freshness rules.
+        """
         await self._warmup()
         await self.symbols.refresh_universes()
-        await self._wait_for_next_primary_boundary()
+
+        tasks = []
+        if settings.enable_normal_engine:
+            tasks.append(asyncio.create_task(self._run_engine_loop(app, "normal")))
+        if settings.enable_momentum_engine:
+            tasks.append(asyncio.create_task(self._run_engine_loop(app, "momentum")))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    async def _run_engine_loop(self, app: Any, engine: str) -> None:
+        """Scan one strategy engine without waiting for the other engine."""
+        if engine not in ("normal", "momentum"):
+            raise ValueError(f"Unknown strategy engine: {engine}")
 
         while self._running:
             try:
-                async with self._scan_lock:
-                    start = utc_now()
-                    await self._run_enabled_scans()
-                    # Refresh independent Normal/Momentum top-N lists after the
-                    # scan has recorded any repeated stale candle-feed failures.
+                start = utc_now()
+                if engine == "normal":
+                    await self._scan_normal()
+                else:
+                    await self._scan_momentum()
+
+                # Universe refresh is serialized through the Normal loop; if
+                # Normal is disabled, Momentum owns refresh responsibility.
+                if engine == "normal" or not settings.enable_normal_engine:
                     await self.symbols.refresh_universes()
-                    state = app.state.bot_state
-                    state["valid_symbols_normal"] = len(self.symbols.normal_symbols)
-                    state["valid_symbols_momentum"] = len(self.symbols.momentum_symbols)
-                    state["eligible_symbols"] = len(self.symbols.valid_pairs)
-                    state["skipped_symbols"] = len(self.symbols.skipped_reasons)
-                    duration_ms = int((utc_now() - start).total_seconds() * 1000)
-                    self.last_scan_time = utc_now()
 
-                    state = app.state.bot_state
-                    state["last_scan"] = utc_iso(self.last_scan_time)
-                    state["last_scan_duration_ms"] = duration_ms
-                    state["scan_count"] = state.get("scan_count", 0) + 1
-                    state["active_signals"] = sum(manager.count() for manager in self.signals.values())
-                    state["watchlist_count"] = sum(manager.count() for manager in self.watchlists.values())
-                    state["scan_errors_normal"] = self.scan_errors["normal"]
-                    state["scan_errors_momentum"] = self.scan_errors["momentum"]
-                    state["uptime_seconds"] = int(
-                        (utc_now() - app.state.start_time).total_seconds()
-                    )
-                    state["normal_engine"] = (
-                        "running" if settings.enable_normal_engine and self.symbols.normal_symbols
-                        else "no_symbols" if settings.enable_normal_engine else "disabled"
-                    )
-                    state["momentum_engine"] = (
-                        "running" if settings.enable_momentum_engine and self.symbols.momentum_symbols
-                        else "no_symbols" if settings.enable_momentum_engine else "disabled"
-                    )
-                    state["last_market_update"] = utc_iso()
+                finished = utc_now()
+                duration_ms = int((finished - start).total_seconds() * 1000)
+                self.last_scan_time = finished
+                state = app.state.bot_state
+                state["last_scan"] = utc_iso(finished)
+                state[f"last_scan_{engine}"] = utc_iso(finished)
+                state[f"last_scan_duration_ms_{engine}"] = duration_ms
+                state["last_scan_duration_ms"] = duration_ms
+                state["scan_count"] = state.get("scan_count", 0) + 1
+                state["active_signals"] = sum(manager.count() for manager in self.signals.values())
+                state["watchlist_count"] = sum(manager.count() for manager in self.watchlists.values())
+                state["scan_errors_normal"] = self.scan_errors["normal"]
+                state["scan_errors_momentum"] = self.scan_errors["momentum"]
+                state["valid_symbols_normal"] = len(self.symbols.normal_symbols)
+                state["valid_symbols_momentum"] = len(self.symbols.momentum_symbols)
+                state["eligible_symbols"] = len(self.symbols.valid_pairs)
+                state["skipped_symbols"] = len(self.symbols.skipped_reasons)
+                state["normal_engine"] = (
+                    "running" if settings.enable_normal_engine and self.symbols.normal_symbols
+                    else "no_symbols" if settings.enable_normal_engine else "disabled"
+                )
+                state["momentum_engine"] = (
+                    "running" if settings.enable_momentum_engine and self.symbols.momentum_symbols
+                    else "no_symbols" if settings.enable_momentum_engine else "disabled"
+                )
+                state["last_market_update"] = utc_iso(finished)
+                state["uptime_seconds"] = int(
+                    (finished - app.state.start_time).total_seconds()
+                )
 
+                if engine == "normal" or not settings.enable_normal_engine:
                     mem = check_memory(force_gc=True)
                     if mem["warning"]:
                         safe_gc()
@@ -169,8 +193,8 @@ class SignalEngine:
                 await self._wait_for_next_primary_boundary()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.exception(f"Scan loop error: {e}")
+            except Exception as exc:
+                logger.exception(f"{engine.title()} scan loop error: {exc}")
                 await self._wait_for_next_primary_boundary()
 
     async def _warmup(self) -> None:
@@ -213,20 +237,6 @@ class SignalEngine:
             f"errors_this_cycle={self.scan_errors[engine] - errors_before} "
             f"active_signals={active} watchlist={watching} duration_ms={duration_ms}"
         )
-
-    async def _run_enabled_scans(self) -> None:
-        """Give the actionable Normal scanner first access to the shared REST limit.
-
-        Normal and Momentum often scan overlapping markets. Running both lists
-        concurrently made 80 Momentum symbols compete with the 40-symbol Normal
-        list for the same five-request REST semaphore, delaying Normal decisions.
-        Normal-first ordering reduces avoidable contention without changing any
-        strategy gate, candle timestamp, or signal freshness limit.
-        """
-        if settings.enable_normal_engine:
-            await self._scan_normal()
-        if settings.enable_momentum_engine:
-            await self._scan_momentum()
 
     async def _scan_normal(self) -> None:
         await self._scan_pairs(self.symbols.normal_symbols, "normal")
