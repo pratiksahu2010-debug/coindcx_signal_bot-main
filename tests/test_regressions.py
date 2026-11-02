@@ -575,3 +575,37 @@ def test_tp_outcome_is_persisted_only_once_per_target(monkeypatch):
         assert calls == [("active", True)]
 
     asyncio.run(run())
+
+
+def test_liquidity_universe_reorders_when_24h_volume_changes():
+    import asyncio
+    from exchange.symbol_manager import SymbolManager
+
+    class FakeRest:
+        def __init__(self):
+            self.volumes = {"BTC": 300, "ETH": 200, "SOL": 100}
+        async def get_market_details(self):
+            return [
+                {"pair": f"B-{name}_USDT", "base_currency_short_name": "USDT",
+                 "target_currency_short_name": name, "coindcx_name": f"{name}USDT",
+                 "status": "active"}
+                for name in ("BTC", "ETH", "SOL")
+            ]
+        async def get_ticker(self):
+            return [
+                {"market": f"{name}USDT", "volume": str(volume), "last_price": "10"}
+                for name, volume in self.volumes.items()
+            ]
+
+    async def run():
+        rest = FakeRest()
+        manager = SymbolManager(rest)
+        await manager.load_and_validate()
+        assert manager.normal_symbols[0] == "B-BTC_USDT"
+        rest.volumes = {"BTC": 50, "ETH": 500, "SOL": 250}
+        manager._last_liquidity_refresh = 0
+        await manager.refresh_universes()
+        assert manager.normal_symbols[0] == "B-ETH_USDT"
+        assert manager.momentum_symbols[0] == "B-ETH_USDT"
+
+    asyncio.run(run())
