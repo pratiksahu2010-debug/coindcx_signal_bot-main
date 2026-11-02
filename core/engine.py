@@ -169,7 +169,7 @@ class SignalEngine:
         for pair in pairs:
             try:
                 for tf in [settings.candle_primary_tf, settings.candle_confirm_tf]:
-                    data = await self.rest.get_candles(pair, tf, limit=120)
+                    data = await self.rest.get_candles(pair, tf, limit=(300 if tf == settings.candle_primary_tf else 120))
                     if data:
                         self.candles.seed(pair, tf, data)
             except Exception as e:
@@ -227,7 +227,7 @@ class SignalEngine:
     async def _process_pair(self, pair: str, engine: str) -> None:
         # Refresh primary TF candles
         primary = settings.candle_primary_tf
-        data = await self.rest.get_candles(pair, primary, limit=100)
+        data = await self.rest.get_candles(pair, primary, limit=300)
         if len(data) < 50:
             return
         self.candles.seed(pair, primary, data)
@@ -301,7 +301,7 @@ class SignalEngine:
         # location, and EMA slope. Mere indicator availability is not confirmation.
         confirm_long = confirm_short = False
         confirm_candle_time_ms = None
-        conf_data = await self.rest.get_candles(pair, settings.candle_confirm_tf, limit=80)
+        conf_data = await self.rest.get_candles(pair, settings.candle_confirm_tf, limit=120)
         if conf_data and len(conf_data) >= 55:
             self.candles.seed(pair, settings.candle_confirm_tf, conf_data)
             c_arr = self.candles.get_arrays(pair, settings.candle_confirm_tf)
