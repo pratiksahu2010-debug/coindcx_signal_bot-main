@@ -156,7 +156,8 @@ class SignalEngine:
         Each engine owns its own loop and cursor while sharing the bounded REST
         client and the same completed-candle/freshness rules.
         """
-        await self._warmup()
+        # Every symbol fetches and seeds its own current candle history in _process_pair;
+        # a separate serial warmup duplicated REST calls and delayed the first scan.
         await self.symbols.refresh_universes()
 
         tasks = []
@@ -226,20 +227,6 @@ class SignalEngine:
             except Exception as exc:
                 logger.exception(f"{engine.title()} scan loop error: {exc}")
                 await self._wait_for_next_primary_boundary()
-
-    async def _warmup(self) -> None:
-        logger.info("Warming up candle buffers...")
-        pairs = list(set(self.symbols.normal_symbols[:15] + self.symbols.momentum_symbols[:15]))
-        for pair in pairs:
-            try:
-                for tf in [settings.candle_primary_tf, settings.candle_confirm_tf]:
-                    data = await self.rest.get_candles(pair, tf, limit=(PRIMARY_CANDLE_HISTORY if tf == settings.candle_primary_tf else CONFIRM_CANDLE_HISTORY))
-                    if data:
-                        self.candles.seed(pair, tf, data)
-            except Exception as e:
-                logger.warning(f"Warmup failed for {pair}: {e}")
-            await asyncio.sleep(0.2)  # polite
-        logger.info("Warmup complete.")
 
     async def _scan_pairs(self, pairs: List[str], engine: str) -> None:
         """Scan one engine with bounded concurrency matching the REST semaphore."""
