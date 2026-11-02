@@ -138,6 +138,52 @@ class TelegramBot:
         engine = (signal.get("engine") or "").upper()
         price = signal.get("price")
 
+        if engine == "SIGNALS":
+            step = signal.get("step") or {}
+            context = signal.get("context_15m") or {}
+            quality = signal.get("quality") or {}
+            ind = signal.get("indicators") or {}
+            risk = signal.get("risk") or {}
+            side = "🟢 CONFIRMED LONG SIGNAL" if direction == "LONG" else "🔴 CONFIRMED SHORT SIGNAL"
+            def stamp(value):
+                try:
+                    return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc).isoformat()
+                except (TypeError, ValueError, OverflowError):
+                    return "n/a"
+            rows = [
+                side, "", f"Symbol: {pair}", "Exchange: CoinDCX", "Strategy: Sequential EMA 9/21 + Step Channel",
+                "Timeframe: 5m", f"Candle UTC: {stamp(signal.get('candle_time_ms'))}",
+                f"Candle IST: {stamp(signal.get('candle_time_ms'))}",
+                "", "ENTRY CONFIRMATIONS:",
+                f"EMA 9: {_num(ind.get('ema9'))}", f"EMA 21: {_num(ind.get('ema21'))}",
+                f"EMA crossover UTC: {stamp(signal.get('cross_time_ms'))}",
+                f"Crossover age: {signal.get('cross_age_bars', 'n/a')} completed candle(s)",
+                f"VWAP: {_num(ind.get('vwap'))}", f"RSI(14): {_num(ind.get('rsi'), 2)}",
+                f"ADX(14): {_num(ind.get('adx'), 2)}", f"+DI: {_num(ind.get('plus_di'), 2)}",
+                f"-DI: {_num(ind.get('minus_di'), 2)}",
+                "", "STEP CHANNEL:",
+                f"Direction: {step.get('direction', 'UNKNOWN')}", f"Step Event: {step.get('event', 'n/a')}",
+                f"MID: {_num(step.get('mid'))}", f"IN+: {_num(step.get('in_plus'))}",
+                f"IN-: {_num(step.get('in_minus'))}", f"OUT+: {_num(step.get('out_plus'))}",
+                f"OUT-: {_num(step.get('out_minus'))}",
+                "", "15M CONTEXT:",
+                f"{context.get('state', 'UNAVAILABLE')} — {context.get('alignment', 'UNAVAILABLE')}",
+                "15M ROLE: INFORMATIONAL ONLY",
+                "", "TRADE LEVELS:", f"Entry: {_num(risk.get('entry'))}",
+                f"Stop Loss: {_num(risk.get('stop_loss'))}", f"Target 1: {_num(risk.get('tp1'))}",
+                f"Target 2: {_num(risk.get('tp2'))}",
+                f"Risk/Reward: {_num((risk.get('rr') or [None])[0], 2)}R / {_num((risk.get('rr') or [None, None])[1], 2)}R",
+                "", "QUALITY:",
+                f"Candle body ratio: {_num(quality.get('body_ratio'), 2)}",
+                f"Relative volume: {_num(quality.get('rvol'), 2)}",
+                f"VWAP extension: {_num(quality.get('vwap_extension_atr'), 2)} ATR",
+                f"Channel extension: {_num(quality.get('channel_extension_atr'), 2)} ATR",
+                f"Confirmation: {', '.join(quality.get('checklist') or [])}",
+                f"Signal age: {signal.get('signal_age_seconds', 'n/a')} seconds",
+                "", "Signal only — no automated trading.",
+            ]
+            return "\n".join(rows)
+
         lines = [
             "🚀 COINDCX SIGNAL BOT",
             "",
