@@ -673,14 +673,30 @@ class SignalEngine:
                     signal["entry_checked_at"] = utc_iso(utc_now())
                     signal["signal_age_seconds"] = round(delivery_age, 1)
                     signal["timestamp"] = utc_iso(utc_now())
-                self.cooldowns[engine].set(pair, engine, direction)
-                logger.info(f"SIGNAL {result.grade} {direction} {pair} score={result.total} engine={engine} strategy={strategy} candle_open_ms={candle_ts} candle_close_ms={candle_close_ms} age_seconds={signal['signal_age_seconds']:.1f} live_price={signal.get('live_price')} confirm_15m_open_ms={signal.get('confirm_candle_time_ms')}")
-                # Push to Telegram only after durable claim and final price check.
+                # Only start cooldown after Telegram confirms at least one delivery.
+                # A transient Telegram outage must not suppress this market for 30 minutes.
+                delivered = False
                 if self.telegram:
                     try:
-                        await self.telegram.send_signal(signal)
+                        delivered = bool(await self.telegram.send_signal(signal))
                     except Exception as e:
                         logger.error(f"Telegram send error: {e}")
+                if delivered:
+                    self.cooldowns[engine].set(pair, engine, direction)
+                    logger.info(
+                        f"SIGNAL_DELIVERED {result.grade} {direction} {pair} "
+                        f"score={result.total} engine={engine} strategy={strategy} "
+                        f"candle_open_ms={candle_ts} candle_close_ms={candle_close_ms} "
+                        f"age_seconds={signal['signal_age_seconds']:.1f} "
+                        f"live_price={signal.get('live_price')} "
+                        f"confirm_15m_open_ms={signal.get('confirm_candle_time_ms')}"
+                    )
+                else:
+                    self.signals[engine].invalidate(pair, engine, direction)
+                    logger.warning(
+                        f"SIGNAL_NOT_DELIVERED {pair} engine={engine} direction={direction}; "
+                        "cooldown_not_set; persistent same-candle claim remains to prevent duplicate retries"
+                    )
         elif disposition == "WATCHLIST":
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
