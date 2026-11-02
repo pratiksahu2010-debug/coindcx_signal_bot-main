@@ -408,3 +408,30 @@ def test_candle_evaluation_diagnostic_includes_both_timeframes_and_gate_reasons(
     assert "confirm_15m_open_ms=1800000000000" in message
     assert "failed=confirm_15m" in message
     assert "score_parts=[EMA Trend:1/1,RSI:1/1]" in message
+
+
+def test_normal_scan_runs_before_momentum_scan(monkeypatch):
+    import asyncio
+    from core.engine import SignalEngine
+    from config import settings
+
+    async def run():
+        engine = SignalEngine(rest=object(), symbols=object(), candles=object())
+        order = []
+        async def normal():
+            order.append("normal")
+        async def momentum():
+            order.append("momentum")
+        monkeypatch.setattr(engine, "_scan_normal", normal)
+        monkeypatch.setattr(engine, "_scan_momentum", momentum)
+        old_normal, old_momentum = settings.enable_normal_engine, settings.enable_momentum_engine
+        settings.enable_normal_engine = True
+        settings.enable_momentum_engine = True
+        try:
+            await engine._run_enabled_scans()
+            assert order == ["normal", "momentum"]
+        finally:
+            settings.enable_normal_engine = old_normal
+            settings.enable_momentum_engine = old_momentum
+
+    asyncio.run(run())
