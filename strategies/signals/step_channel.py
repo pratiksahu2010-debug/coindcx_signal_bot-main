@@ -29,14 +29,35 @@ def pine_atr_series(high, low, close, period: int = 14) -> np.ndarray:
     for i in range(period,n): out[i]=(out[i-1]*(period-1)+tr[i])/period
     return out
 
-def calculate_step_channel(high, low, close, times=None, atr_length=14, inner_mult=2.5, outer_mult=4.0, base_length=50):
+def calculate_step_channel(high, low, close, times=None, atr_length=14, inner_mult=2.5, outer_mult=4.0, base_length=50, initial_state=None):
     h=np.asarray(high,dtype=np.float64); l=np.asarray(low,dtype=np.float64); c=np.asarray(close,dtype=np.float64); n=len(c)
     mids=np.full(n,np.nan); ins=np.full(n,np.nan); ind=np.full(n,np.nan); outs=np.full(n,np.nan); outd=np.full(n,np.nan)
     if len(h)!=n or len(l)!=n or n<max(atr_length,base_length):
         return StepChannelResult(None,None,None,None,None,None,"UNKNOWN",None,None,{})
     atrs=pine_atr_series(h,l,c,atr_length); ts=np.asarray(times,dtype=np.int64) if times is not None else np.arange(n,dtype=np.int64)
     initialized=False; mid=None; step_atr=None; direction="UNKNOWN"; event=None; event_time=None
-    for i in range(n):
+    start_index=0
+    # Resume from a durable prior-bar snapshot when the downloaded history overlaps it.
+    saved = initial_state or {}
+    try:
+        saved_time = int(saved.get("candle_time_ms") or 0)
+        saved_mid = float(saved.get("mid"))
+        saved_atr = float(saved.get("atr"))
+        if saved_time and saved_time < int(ts[-1]) and int(ts[0]) <= saved_time:
+            mid=saved_mid; step_atr=saved_atr; initialized=True
+            direction=str(saved.get("direction") or "UNKNOWN")
+            event=saved.get("event") or None
+            event_time=int(saved.get("event_time_ms") or 0) or None
+            start_index=int(np.searchsorted(ts, saved_time, side="right"))
+        elif saved_time == int(ts[-1]) and saved_mid and saved_atr:
+            mid=saved_mid; step_atr=saved_atr; initialized=True
+            direction=str(saved.get("direction") or "UNKNOWN")
+            event=saved.get("event") or None
+            event_time=int(saved.get("event_time_ms") or 0) or None
+            start_index=n
+    except (TypeError, ValueError, OverflowError):
+        initialized=False; mid=None; step_atr=None; direction="UNKNOWN"; event=None; event_time=None; start_index=0
+    for i in range(start_index,n):
         if not initialized:
             if i>=base_length-1 and np.isfinite(atrs[i]):
                 mid=float(np.mean(c[i-base_length+1:i+1])); step_atr=float(atrs[i]); initialized=True
