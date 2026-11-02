@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, Response
+from config import settings
 from utils.time_utils import utc_iso
 from utils.memory_monitor import check_memory
 
@@ -21,19 +23,29 @@ async def root() -> Dict[str, Any]:
 
 
 @router.get("/health")
-async def health() -> Dict[str, Any]:
+async def health(request: Request):
+    """Report degraded startup state so Render does not mistake a paused bot for healthy."""
+    state = getattr(request.app.state, "bot_state", None)
+    if state is not None:
+        database = state.get("database")
+        enabled = (
+            (settings.enable_normal_engine and state.get("normal_engine") == "paused_database_unavailable")
+            or (settings.enable_momentum_engine and state.get("momentum_engine") == "paused_database_unavailable")
+        )
+        if database == "unavailable" or enabled:
+            return JSONResponse(
+                status_code=503,
+                content={"ok": False, "status": "degraded", "database": database,
+                         "normal_engine": state.get("normal_engine"),
+                         "momentum_engine": state.get("momentum_engine")},
+            )
     return {"ok": True, "status": "healthy"}
 
 
-@router.get("/ping")
-async def ping() -> Dict[str, Any]:
-    """Lightweight keep-alive endpoint. No market scans, no Telegram, no DB writes."""
-    return {
-        "ok": True,
-        "service": "coindcx-signal-bot",
-        "status": "alive",
-        "timestamp": utc_iso(),
-    }
+@router.get("/ping", response_class=Response)
+async def ping() -> Response:
+    """Empty keep-alive response. No scans, exchange calls, Telegram, or DB work."""
+    return Response(status_code=204)
 
 
 @router.get("/status")
