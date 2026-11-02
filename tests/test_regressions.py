@@ -444,3 +444,43 @@ def test_scan_loop_starts_normal_and_momentum_as_independent_tasks(monkeypatch):
             settings.enable_momentum_engine = old_momentum
 
     asyncio.run(run())
+
+
+def test_persistent_dedup_claim_prunes_expired_rows(tmp_path):
+    import asyncio
+    from datetime import datetime, timedelta
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from database import db as database_db
+    from database.db import Base
+    from database import models  # noqa: F401
+    from database.models import SignalDedupRecord
+    from database.repositories import claim_signal_once
+
+    async def run():
+        test_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'dedup_cleanup.db'}")
+        old_engine, old_factory = database_db.engine, database_db.SessionLocal
+        database_db.engine = test_engine
+        database_db.SessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+        try:
+            async with test_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            async with database_db.SessionLocal() as session:
+                session.add(SignalDedupRecord(
+                    dedup_key="expired:SHORT:1", candle_time_ms=1, payload="{}",
+                    created_at=datetime.utcnow() - timedelta(hours=5),
+                    expires_at=datetime.utcnow() - timedelta(seconds=1),
+                ))
+                await session.commit()
+            signal = {"pair": "B-ETH_USDT", "engine": "normal", "direction": "LONG", "score": 8.0}
+            assert await claim_signal_once(signal, 2_000_000, ttl_hours=4)
+            async with database_db.SessionLocal() as session:
+                result = await session.execute(select(SignalDedupRecord).where(
+                    SignalDedupRecord.dedup_key == "expired:SHORT:1"
+                ))
+                assert result.scalar_one_or_none() is None
+        finally:
+            database_db.engine, database_db.SessionLocal = old_engine, old_factory
+            await test_engine.dispose()
+
+    asyncio.run(run())
