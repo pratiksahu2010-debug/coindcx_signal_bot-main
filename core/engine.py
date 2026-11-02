@@ -119,6 +119,20 @@ class SignalEngine:
             engine = signal.get("engine")
             if engine in self.signals and self.signals[engine].restore(signal):
                 restored += 1
+                try:
+                    created = datetime.fromisoformat(
+                        str(signal.get("created_at", "")).replace("Z", "+00:00")
+                    )
+                    elapsed = max(0.0, (utc_now() - created).total_seconds())
+                    remaining = int(self.cooldowns[engine].default_seconds - elapsed)
+                    if remaining > 0:
+                        self.cooldowns[engine].set(
+                            signal["pair"], engine, signal["direction"], seconds=remaining
+                        )
+                except (TypeError, ValueError):
+                    logger.warning(
+                        f"Could not restore cooldown timestamp for {signal.get('pair')}"
+                    )
         logger.info(f"ACTIVE_SIGNALS_RESTORED count={restored}")
         return restored
 
