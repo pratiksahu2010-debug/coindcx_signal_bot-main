@@ -171,13 +171,6 @@ class SignalEngine:
         # 120-second signal-age limit. Start on the next usable close boundary.
         await self._wait_for_next_primary_boundary()
 
-        tasks = []
-        if settings.enable_normal_engine:
-            tasks.append(asyncio.create_task(self._run_engine_loop(app, "normal")))
-        if settings.enable_momentum_engine:
-            tasks.append(asyncio.create_task(self._run_engine_loop(app, "momentum")))
-        if settings.enable_signals_engine:
-            tasks.append(asyncio.create_task(self._run_engine_loop(app, "signals")))
         if settings.enable_signals_engine:
             try:
                 from database.repositories import load_step_channel_states
@@ -185,6 +178,14 @@ class SignalEngine:
                 logger.info(f"STEP_CHANNEL_STATES_RESTORED count={len(self._step_channel_states)}")
             except Exception as exc:
                 logger.warning(f"Step Channel state restore unavailable: {exc}")
+
+        tasks = []
+        if settings.enable_normal_engine:
+            tasks.append(asyncio.create_task(self._run_engine_loop(app, "normal")))
+        if settings.enable_momentum_engine:
+            tasks.append(asyncio.create_task(self._run_engine_loop(app, "momentum")))
+        if settings.enable_signals_engine:
+            tasks.append(asyncio.create_task(self._run_engine_loop(app, "signals")))
         if tasks:
             await asyncio.gather(*tasks)
 
