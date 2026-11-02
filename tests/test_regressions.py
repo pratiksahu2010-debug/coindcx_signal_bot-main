@@ -703,13 +703,16 @@ def test_scan_loop_waits_for_fresh_boundary_before_first_engine_scan(monkeypatch
         engine._wait_for_next_primary_boundary = wait_for_boundary
         old_normal = settings.enable_normal_engine
         old_momentum = settings.enable_momentum_engine
+        old_signals = settings.enable_signals_engine
         settings.enable_normal_engine = False
         settings.enable_momentum_engine = False
+        settings.enable_signals_engine = False
         try:
             await engine.run_scan_loop(app=None)
         finally:
             settings.enable_normal_engine = old_normal
             settings.enable_momentum_engine = old_momentum
+            settings.enable_signals_engine = old_signals
 
     events = []
     asyncio.run(run())
