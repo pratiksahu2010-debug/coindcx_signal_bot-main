@@ -816,8 +816,12 @@ class SignalEngine:
                     except Exception as exc:
                         logger.error(f"Persist SL outcome failed for {pair}: {exc}")
                 continue
-            hits = [i for i, target in enumerate((t1, t2, t3), 1)
-                    if target is not None and (high >= target if direction == "LONG" else low <= target)]
+            hits = [
+                i for i, target in enumerate((t1, t2, t3), 1)
+                if target is not None
+                and not sig.get(f"tp{i}_hit", False)
+                and (high >= target if direction == "LONG" else low <= target)
+            ]
             for level in hits:
                 self.signals[engine].mark_tp(pair, engine, direction, level)
             if hits:
