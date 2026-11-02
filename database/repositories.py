@@ -136,7 +136,8 @@ async def claim_signal_once(signal: dict, candle_time_ms: int, ttl_hours: int = 
     # Including candle time avoids a four-hour lock suppressing legitimate
     # signals on later candles, while excluding engine prevents cross-engine
     # duplicates for the same market move.
-    key = f"{signal['pair']}:{signal['direction']}:{int(candle_time_ms)}"
+    scope = "signals" if signal.get("engine") == "signals" else "legacy"
+    key = f"{scope}:{signal['pair']}:{signal['direction']}:{int(candle_time_ms)}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     expires = now + timedelta(hours=max(1, int(ttl_hours)))
     async with factory() as session:
