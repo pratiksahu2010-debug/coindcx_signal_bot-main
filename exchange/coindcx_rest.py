@@ -64,9 +64,10 @@ class CoinDCXRest:
         return {pair: dict(timeframes) for pair, timeframes in self._stale_market_timeframes.items()}
 
     async def get_last_price(self, pair: str) -> Optional[float]:
-        """Fetch a fresh public ticker price for one market; never place orders."""
+        """Fetch a timestamp-validated public ticker price; never place orders."""
         wanted = self._market_key(pair)
         rows = await self.get_ticker()
+        now_ms = int(time.time() * 1000)
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -76,6 +77,27 @@ class CoinDCXRest:
             )
             if not any(self._market_key(alias) == wanted for alias in aliases if alias):
                 continue
+
+            # CoinDCX ticker responses include an epoch-millisecond timestamp.
+            # A valid HTTP response can still contain an old market snapshot;
+            # fail closed rather than validating an entry against stale prices.
+            raw_timestamp = row.get("timestamp")
+            try:
+                if raw_timestamp is None:
+                    continue
+                ticker_ms = int(float(raw_timestamp))
+                if ticker_ms < 10**12:
+                    ticker_ms *= 1000
+                age_seconds = (now_ms - ticker_ms) / 1000.0
+                if age_seconds < -5.0 or age_seconds > 30.0:
+                    logger.warning(
+                        f"TICKER_STALE {pair} ticker_age_seconds={age_seconds:.1f}; "
+                        "live entry validation rejected"
+                    )
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                continue
+
             for key in ("last_price", "lastPrice", "price", "close"):
                 try:
                     value = float(row.get(key))
