@@ -19,8 +19,8 @@ def evaluate_signal(pair, opens, highs, lows, closes, volumes, times,
         return {"valid":False,"reason":"invalid_ohlcv"}
     e9=ema_series(c,9); e21=ema_series(c,21)
     cross_idx=None; direction=None
-    for age in range(1,min(max_cross_age,n-1)+1):
-        i=n-age
+    for age in range(0,min(max_cross_age,n-1)):
+        i=n-1-age
         if e9[i-1]<=e21[i-1] and e9[i]>e21[i]: cross_idx=i; direction="LONG"; break
         if e9[i-1]>=e21[i-1] and e9[i]<e21[i]: cross_idx=i; direction="SHORT"; break
     if direction is None: return {"valid":False,"reason":"no_fresh_ema_crossover"}
