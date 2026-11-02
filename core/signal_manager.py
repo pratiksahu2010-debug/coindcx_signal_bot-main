@@ -34,6 +34,11 @@ class SignalManager:
     def restore(self, signal: dict) -> bool:
         """Restore a persisted active signal without resetting its original TTL."""
         key = self._key(signal["pair"], signal["engine"], signal["direction"])
+        existing = self._signals.get(key)
+        if existing and existing.get("status") == "active":
+            # The loader returns newest records first; keep the newest active
+            # record instead of allowing an older duplicate row to overwrite it.
+            return False
         item = dict(signal)
         try:
             expires_at = datetime.fromisoformat(
