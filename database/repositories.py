@@ -175,3 +175,55 @@ async def claim_signal_once(signal: dict, candle_time_ms: int, ttl_hours: int = 
             await session.rollback()
             logger.error(f"Persistent signal claim failed: {exc}")
             return False
+
+
+async def save_step_channel_state(pair: str, state: dict) -> bool:
+    """Upsert the latest confirmed Step Channel snapshot for one market."""
+    import json
+    from datetime import datetime
+    from sqlalchemy import select
+    from database import db as database_db
+    from database.step_channel_model import StepChannelStateRecord
+    if database_db.SessionLocal is None:
+        return False
+    async with database_db.SessionLocal() as session:
+        try:
+            row = await session.get(StepChannelStateRecord, pair)
+            if row is None:
+                row = StepChannelStateRecord(pair=pair)
+                session.add(row)
+            row.direction = str(state.get("direction", "UNKNOWN"))
+            row.event = str(state.get("event") or "")
+            row.event_time_ms = int(state.get("event_time_ms") or 0)
+            row.candle_time_ms = int(state.get("candle_time_ms") or 0)
+            row.payload = json.dumps(state, default=str)
+            row.updated_at = datetime.utcnow()
+            await session.commit()
+            return True
+        except Exception as exc:
+            await session.rollback()
+            logger.error(f"Step Channel state persistence failed for {pair}: {exc}")
+            return False
+
+
+async def load_step_channel_states() -> dict:
+    """Restore persisted Step Channel snapshots; fresh OHLCV replay remains authoritative."""
+    import json
+    from sqlalchemy import select
+    from database import db as database_db
+    from database.step_channel_model import StepChannelStateRecord
+    if database_db.SessionLocal is None:
+        return {}
+    async with database_db.SessionLocal() as session:
+        try:
+            result = await session.execute(select(StepChannelStateRecord))
+            restored = {}
+            for row in result.scalars().all():
+                try:
+                    restored[row.pair] = json.loads(row.payload or "{}")
+                except (TypeError, ValueError):
+                    logger.warning(f"Invalid persisted Step Channel state for {row.pair}")
+            return restored
+        except Exception as exc:
+            logger.error(f"Step Channel state restore failed: {exc}")
+            return {}
