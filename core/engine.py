@@ -25,6 +25,11 @@ from indicators import (
 import numpy as np
 
 
+# Covers a full UTC day (288 x 5m / 96 x 15m) plus a small history margin.
+PRIMARY_CANDLE_HISTORY = 300
+CONFIRM_CANDLE_HISTORY = 120
+
+
 def _score_disposition(score: float, signal_threshold: float) -> str:
     """Classify scores without allowing watchlist scores to become alerts."""
     if score >= max(7.0, signal_threshold):
@@ -174,7 +179,7 @@ class SignalEngine:
         for pair in pairs:
             try:
                 for tf in [settings.candle_primary_tf, settings.candle_confirm_tf]:
-                    data = await self.rest.get_candles(pair, tf, limit=(300 if tf == settings.candle_primary_tf else 120))
+                    data = await self.rest.get_candles(pair, tf, limit=(PRIMARY_CANDLE_HISTORY if tf == settings.candle_primary_tf else CONFIRM_CANDLE_HISTORY))
                     if data:
                         self.candles.seed(pair, tf, data)
             except Exception as e:
@@ -232,7 +237,7 @@ class SignalEngine:
     async def _process_pair(self, pair: str, engine: str) -> None:
         # Refresh primary TF candles
         primary = settings.candle_primary_tf
-        data = await self.rest.get_candles(pair, primary, limit=300)
+        data = await self.rest.get_candles(pair, primary, limit=PRIMARY_CANDLE_HISTORY)
         if len(data) < 50:
             return
         self.candles.seed(pair, primary, data)
@@ -306,7 +311,7 @@ class SignalEngine:
         # location, and EMA slope. Mere indicator availability is not confirmation.
         confirm_long = confirm_short = False
         confirm_candle_time_ms = None
-        conf_data = await self.rest.get_candles(pair, settings.candle_confirm_tf, limit=120)
+        conf_data = await self.rest.get_candles(pair, settings.candle_confirm_tf, limit=CONFIRM_CANDLE_HISTORY)
         if conf_data and len(conf_data) >= 55:
             self.candles.seed(pair, settings.candle_confirm_tf, conf_data)
             c_arr = self.candles.get_arrays(pair, settings.candle_confirm_tf)
