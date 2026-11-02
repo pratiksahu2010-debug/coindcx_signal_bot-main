@@ -320,6 +320,7 @@ def test_stale_market_quarantine_filters_both_engine_universes_and_restores():
             assert "B-BAD_USDT" not in manager._quarantined
             assert manager.normal_symbols[0] == "B-BAD_USDT"
             assert manager.momentum_symbols[0] == "B-BAD_USDT"
+            assert "B-BAD_USDT" not in manager.skipped_reasons
         finally:
             settings.normal_symbol_limit, settings.momentum_symbol_limit = old_normal, old_momentum
 
