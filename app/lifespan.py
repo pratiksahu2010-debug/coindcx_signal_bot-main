@@ -58,7 +58,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "websocket_status": "disabled_rest_mode" if not settings.enable_websocket else "configured_but_not_started",
         "normal_engine": "starting" if settings.enable_normal_engine else "disabled",
         "momentum_engine": "starting" if settings.enable_momentum_engine else "disabled",
-        "signals_engine": "starting" if settings.enable_signals_engine else "disabled",
         "last_market_update": None,
         "last_scan": None,
         "active_signals": 0,
@@ -84,7 +83,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         app.state.bot_state["normal_engine"] = "paused_database_unavailable"
         app.state.bot_state["momentum_engine"] = "paused_database_unavailable"
-        app.state.bot_state["signals_engine"] = "paused_database_unavailable"
         logger.critical(
             "SIGNAL_SCANNING_DISABLED database_unavailable=true; "
             "health endpoints remain available, no market scans or alerts will run"
