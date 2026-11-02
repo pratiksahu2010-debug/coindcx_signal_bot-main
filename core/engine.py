@@ -324,7 +324,10 @@ class SignalEngine:
             logger.info(f"STALE_CANDLE_SKIP {pair} engine=signals candle_open_ms={ts} age_seconds={age:.1f}")
             return
 
-        channel = calculate_step_channel(arr["high"], arr["low"], arr["close"], arr["time"])
+        channel = calculate_step_channel(
+            arr["high"], arr["low"], arr["close"], arr["time"],
+            initial_state=self._step_channel_states.get(pair),
+        )
         if channel.direction != "UNKNOWN":
             snapshot = {
                 "direction": channel.direction, "event": channel.event,
@@ -345,6 +348,7 @@ class SignalEngine:
             adx_min=float(settings.signals_adx_min),
             max_vwap_extension_atr=float(settings.signals_max_vwap_extension_atr),
             max_mid_extension_atr=float(settings.signals_max_channel_extension_atr),
+            step_channel=channel,
         )
         if not result.get("valid"):
             logger.info(
