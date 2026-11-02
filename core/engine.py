@@ -18,6 +18,8 @@ from core.signal_manager import SignalManager
 from core.risk_calculator import calculate_risk, is_entry_price_actionable
 from strategies.normal.strategy_manager import detect_strategy
 from strategies.momentum.strategy_manager import detect_momentum_state
+from strategies.signals.strategy import evaluate_signal
+from strategies.signals.step_channel import calculate_step_channel
 from indicators import (
     ema, rsi, atr, adx, macd, vwap, relative_volume,
     bollinger_bands, bandwidth, keltner_channels, roc,
@@ -86,20 +88,24 @@ class SignalEngine:
         self.cooldowns = {
             "normal": CooldownManager(default_seconds=1800),
             "momentum": CooldownManager(default_seconds=1800),
+            "signals": CooldownManager(default_seconds=1800),
         }
         self.watchlists = {
             "normal": WatchlistManager(max_entries=50, ttl_minutes=60),
             "momentum": WatchlistManager(max_entries=50, ttl_minutes=60),
+            "signals": WatchlistManager(max_entries=50, ttl_minutes=60),
         }
         self.signals = {
             "normal": SignalManager(max_active=30, ttl_hours=4),
             "momentum": SignalManager(max_active=30, ttl_hours=4),
+            "signals": SignalManager(max_active=30, ttl_hours=4),
         }
         self._scan_lock = asyncio.Lock()
         self._running = True
         self.last_scan_time: Optional[datetime] = None
         self.telegram = None
-        self.scan_errors = {"normal": 0, "momentum": 0}
+        self.scan_errors = {"normal": 0, "momentum": 0, "signals": 0}
+        self._step_channel_states = {}
         # Independent candle cursors prevent one strategy engine suppressing the other.
         self._last_processed = {"normal": {}, "momentum": {}}
 
@@ -170,12 +176,21 @@ class SignalEngine:
             tasks.append(asyncio.create_task(self._run_engine_loop(app, "normal")))
         if settings.enable_momentum_engine:
             tasks.append(asyncio.create_task(self._run_engine_loop(app, "momentum")))
+        if settings.enable_signals_engine:
+            tasks.append(asyncio.create_task(self._run_engine_loop(app, "signals"))
+        if settings.enable_signals_engine:
+            try:
+                from database.repositories import load_step_channel_states
+                self._step_channel_states = await load_step_channel_states()
+                logger.info(f"STEP_CHANNEL_STATES_RESTORED count={len(self._step_channel_states)}")
+            except Exception as exc:
+                logger.warning(f"Step Channel state restore unavailable: {exc}")
         if tasks:
             await asyncio.gather(*tasks)
 
     async def _run_engine_loop(self, app: Any, engine: str) -> None:
         """Scan one strategy engine without waiting for the other engine."""
-        if engine not in ("normal", "momentum"):
+        if engine not in ("normal", "momentum", "signals"):
             raise ValueError(f"Unknown strategy engine: {engine}")
 
         while self._running:
@@ -189,12 +204,15 @@ class SignalEngine:
                 start = utc_now()
                 if engine == "normal":
                     await self._scan_normal()
-                else:
+                elif engine == "momentum":
                     await self._scan_momentum()
+                else:
+                    await self._scan_signals()
 
                 # Universe refresh is serialized through the Normal loop; if
                 # Normal is disabled, Momentum owns refresh responsibility.
-                if engine == "normal" or not settings.enable_normal_engine:
+                if (engine == "normal" or (engine == "momentum" and not settings.enable_normal_engine)
+                    or (engine == "signals" and not settings.enable_normal_engine and not settings.enable_momentum_engine)):
                     await self.symbols.refresh_universes()
 
                 finished = utc_now()
@@ -271,6 +289,12 @@ class SignalEngine:
 
     async def _scan_momentum(self) -> None:
         await self._scan_pairs(self.symbols.momentum_symbols, "momentum")
+
+    async def _scan_signals(self) -> None:
+        # Run on the union of the already-selected top-40 and top-80 lists.
+        # This is independent of the legacy engines but does not rediscover markets.
+        pairs = list(dict.fromkeys(self.symbols.normal_symbols + self.symbols.momentum_symbols))
+        await self._scan_pairs(pairs, "signals")
 
     async def _process_pair(self, pair: str, engine: str) -> None:
         # Refresh primary TF candles
