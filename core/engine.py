@@ -328,7 +328,7 @@ class SignalEngine:
             arr["high"], arr["low"], arr["close"], arr["time"],
             initial_state=self._step_channel_states.get(pair),
         )
-        if channel.direction != "UNKNOWN":
+        if channel.mid is not None:
             snapshot = {
                 "direction": channel.direction, "event": channel.event,
                 "event_time_ms": channel.event_time_ms, "candle_time_ms": ts,
