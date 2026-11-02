@@ -16,12 +16,30 @@ async def test_health():
 
 
 @pytest.mark.asyncio
-async def test_ping():
+async def test_ping_is_empty_keepalive_only():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/ping")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is True
-        assert data["service"] == "coindcx-signal-bot"
-        assert "timestamp" in data
+        assert resp.status_code == 204
+        assert resp.content == b""
+
+
+@pytest.mark.asyncio
+async def test_health_reports_database_degraded_state():
+    old_state = getattr(app.state, "bot_state", None)
+    app.state.bot_state = {
+        "database": "unavailable",
+        "normal_engine": "paused_database_unavailable",
+        "momentum_engine": "paused_database_unavailable",
+    }
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/health")
+            assert resp.status_code == 503
+            assert resp.json()["status"] == "degraded"
+    finally:
+        if old_state is None:
+            delattr(app.state, "bot_state")
+        else:
+            app.state.bot_state = old_state
