@@ -18,6 +18,7 @@ async def init_db() -> None:
     global engine, SessionLocal
     # Import models before create_all so every persistent table is registered.
     from database import models  # noqa: F401
+    from database import step_channel_model  # noqa: F401
     url = settings.database_url
     if settings.use_postgres:
         # Render commonly supplies postgres:// or postgresql:// URLs; use the
