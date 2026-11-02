@@ -27,7 +27,7 @@ async def claim_signal_once(signal: dict, candle_time_ms: int, ttl_hours: int = 
     """Claim one alert per pair/engine/direction across process restarts."""
     import json
     from datetime import datetime, timedelta, timezone
-    from sqlalchemy import select
+    from sqlalchemy import select, delete
     from sqlalchemy.exc import IntegrityError
     from database import db as database_db
     from database.models import SignalDedupRecord
@@ -46,6 +46,11 @@ async def claim_signal_once(signal: dict, candle_time_ms: int, ttl_hours: int = 
     expires = now + timedelta(hours=max(1, int(ttl_hours)))
     async with factory() as session:
         try:
+            # Expired candle claims no longer protect against duplicates; prune
+            # them opportunistically so the persistent dedup table stays bounded.
+            await session.execute(
+                delete(SignalDedupRecord).where(SignalDedupRecord.expires_at <= now)
+            )
             result = await session.execute(
                 select(SignalDedupRecord)
                 .where(SignalDedupRecord.dedup_key == key)
