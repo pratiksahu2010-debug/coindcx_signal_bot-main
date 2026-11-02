@@ -418,7 +418,7 @@ def test_scan_loop_starts_normal_and_momentum_as_independent_tasks(monkeypatch):
     from config import settings
 
     async def run():
-        engine = SignalEngine(rest=object(), symbols=object(), candles=object())
+        engine = SignalEngine(rest=object(), symbols=SimpleNamespace(refresh_universes=None), candles=object())
         called = []
         async def warmup():
             called.append("warmup")
@@ -430,7 +430,7 @@ def test_scan_loop_starts_normal_and_momentum_as_independent_tasks(monkeypatch):
             called.append(name)
 
         monkeypatch.setattr(engine, "_warmup", warmup)
-        monkeypatch.setattr(engine.symbols, "refresh_universes", refresh, raising=False)
+        monkeypatch.setattr(engine.symbols, "refresh_universes", refresh)
         monkeypatch.setattr(engine, "_run_engine_loop", engine_loop)
         old_normal, old_momentum = settings.enable_normal_engine, settings.enable_momentum_engine
         settings.enable_normal_engine = True
