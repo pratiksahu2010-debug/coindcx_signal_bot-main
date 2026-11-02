@@ -23,6 +23,8 @@ class SymbolManager:
         self._ranked_momentum: List[str] = []
         self._quarantined: Dict[str, dict] = {}
         self._quarantine_retry_seconds = 15 * 60
+        self._last_liquidity_refresh = 0.0
+        self._liquidity_refresh_seconds = 15 * 60
 
     @staticmethod
     def _norm(value: object) -> str:
@@ -208,6 +210,7 @@ class SymbolManager:
 
         self._ranked_normal = rank_universe(normal_rank, settings.normal_symbol_limit, "Normal")
         self._ranked_momentum = rank_universe(momentum_rank, settings.momentum_symbol_limit, "Momentum")
+        self._last_liquidity_refresh = __import__("time").time()
         self._select_active_symbols()
         logger.info(
             f"Dynamic universe ready: normal={len(self.normal_symbols)}, "
@@ -216,6 +219,51 @@ class SymbolManager:
         if not self.valid_pairs:
             logger.error("No eligible active USDT markets were discovered from CoinDCX")
 
+
+    async def _refresh_liquidity_ranking(self) -> None:
+        """Re-rank the discovered market universe by fresh 24h ticker volume."""
+        ticker_rows = await self.rest.get_ticker()
+        latest = self._ticker_liquidity(ticker_rows)
+        if not latest:
+            logger.warning("Liquidity refresh returned no usable ticker volumes; retaining prior ranking")
+            return
+
+        for pair in self.valid_pairs:
+            metadata = self.metadata.get(pair, {})
+            aliases = (
+                pair, metadata.get("pair"), metadata.get("coindcx_name"),
+                metadata.get("symbol"),
+            )
+            volume = max((latest.get(self._norm(alias), 0.0) for alias in aliases), default=0.0)
+            self.liquidity[pair] = volume
+            if volume <= 0:
+                self.skipped_reasons[pair] = "no matching positive ticker volume"
+            else:
+                self.skipped_reasons.pop(pair, None)
+
+        normal_preferences = {
+            self._norm(symbol): index
+            for index, symbol in enumerate(self._load_yaml("config/normal_symbols.yaml"))
+        }
+        momentum_preferences = {
+            self._norm(symbol): index
+            for index, symbol in enumerate(self._load_yaml("config/momentum_symbols.yaml"))
+        }
+
+        def rank(preferences: Dict[str, int], label: str) -> List[str]:
+            pairs = [pair for pair in self.valid_pairs if self.liquidity.get(pair, 0.0) > 0]
+            pairs.sort(key=lambda pair: (
+                -self.liquidity.get(pair, 0.0),
+                preferences.get(self._norm(pair), 10**9),
+                pair,
+            ))
+            logger.info(f"{label}: refreshed 24h liquidity ranking ({len(pairs)} markets with volume)")
+            return pairs
+
+        self._ranked_normal = rank(normal_preferences, "Normal")
+        self._ranked_momentum = rank(momentum_preferences, "Momentum")
+        self._last_liquidity_refresh = __import__("time").time()
+        self._select_active_symbols()
 
     def _refresh_quarantine_from_rest(self) -> None:
         """Quarantine markets whose required candle feeds repeatedly return stale history."""
@@ -273,8 +321,16 @@ class SymbolManager:
         import asyncio
         import time
 
-        self._refresh_quarantine_from_rest()
         now = time.time()
+        if now - self._last_liquidity_refresh >= self._liquidity_refresh_seconds:
+            try:
+                await self._refresh_liquidity_ranking()
+            except Exception as exc:
+                logger.warning(f"24h liquidity refresh failed; retaining previous universe: {exc}")
+                # Retry after five minutes rather than on every 5m scan boundary.
+                self._last_liquidity_refresh = now - self._liquidity_refresh_seconds + 300
+
+        self._refresh_quarantine_from_rest()
         due = [pair for pair, item in self._quarantined.items() if item["retry_at"] <= now]
         if due:
             primary_tf = settings.candle_primary_tf
