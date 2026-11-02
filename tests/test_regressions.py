@@ -508,3 +508,44 @@ def test_ticker_price_lookup_rejects_stale_or_untimestamped_prices():
         assert await client.get_last_price("B-BTC_USDT") is None
 
     asyncio.run(run())
+
+
+def test_active_signal_persistence_restore_and_terminal_update(tmp_path):
+    import asyncio
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from database import db as database_db
+    from database.db import Base
+    from database import models  # noqa: F401
+    from database.repositories import save_signal, load_active_signals, update_signal_record
+    from core.signal_manager import SignalManager
+
+    async def run():
+        test_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'signals.db'}")
+        old_engine, old_factory = database_db.engine, database_db.SessionLocal
+        database_db.engine = test_engine
+        database_db.SessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+        try:
+            async with test_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            now = datetime.now(timezone.utc)
+            signal = {
+                "pair": "B-BTC_USDT", "engine": "normal", "direction": "LONG",
+                "score": 8.0, "grade": "STRONG", "price": 100.0,
+                "status": "active", "created_at": now.isoformat(),
+                "expires_at": (now + timedelta(hours=3)).isoformat(),
+                "risk": {"stop_loss": 95.0, "tp1": 105.0, "tp2": 110.0, "tp3": 115.0},
+            }
+            assert await save_signal(signal)
+            restored = await load_active_signals()
+            assert len(restored) == 1 and restored[0]["pair"] == "B-BTC_USDT"
+            manager = SignalManager()
+            assert manager.restore(restored[0])
+            assert manager.count() == 1
+            assert await update_signal_record(restored[0], "closed_tp")
+            assert await load_active_signals() == []
+        finally:
+            database_db.engine, database_db.SessionLocal = old_engine, old_factory
+            await test_engine.dispose()
+
+    asyncio.run(run())
