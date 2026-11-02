@@ -31,6 +31,23 @@ class SignalManager:
         logger.info(f"Signal ACTIVE {key} score={item.get('score')}")
         return item.get("status") == "active"
 
+    def restore(self, signal: dict) -> bool:
+        """Restore a persisted active signal without resetting its original TTL."""
+        key = self._key(signal["pair"], signal["engine"], signal["direction"])
+        item = dict(signal)
+        try:
+            expires_at = datetime.fromisoformat(
+                str(item["expires_at"]).replace("Z", "+00:00")
+            )
+            if expires_at <= datetime.now(timezone.utc):
+                return False
+        except (KeyError, TypeError, ValueError):
+            return False
+        item["status"] = "active"
+        self._signals[key] = item
+        self._evict()
+        return item.get("status") == "active"
+
     def mark_tp(self, pair, engine, direction, level):
         sig = self._signals.get(self._key(pair, engine, direction))
         if not sig or sig.get("status") != "active" or level not in (1,2,3): return False
