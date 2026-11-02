@@ -435,3 +435,45 @@ def test_normal_scan_runs_before_momentum_scan(monkeypatch):
             settings.enable_momentum_engine = old_momentum
 
     asyncio.run(run())
+
+
+def test_candle_history_covers_full_utc_session_for_vwap():
+    from core.engine import PRIMARY_CANDLE_HISTORY, CONFIRM_CANDLE_HISTORY
+
+    assert PRIMARY_CANDLE_HISTORY >= 24 * 60 // 5
+    assert CONFIRM_CANDLE_HISTORY >= 24 * 60 // 15
+    assert PRIMARY_CANDLE_HISTORY <= 1000
+    assert CONFIRM_CANDLE_HISTORY <= 1000
+
+
+def test_telegram_send_signal_reports_delivery_success_and_failure():
+    import asyncio
+    from tgbot.bot import TelegramBot
+
+    class SuccessBot:
+        async def send_message(self, **kwargs):
+            return None
+
+    class FailureBot:
+        async def send_message(self, **kwargs):
+            raise RuntimeError("temporary Telegram failure")
+
+    async def run():
+        signal = {
+            "pair": "B-BTC_USDT", "display": "BTC/USDT",
+            "direction": "LONG", "engine": "normal", "strategy": "TREND_CONTINUATION",
+            "score": 8.0, "grade": "STRONG", "price": 100.0,
+            "candle_time_ms": 1_800_000_000_000,
+            "candle_close_time_ms": 1_800_000_300_000,
+            "confirm_candle_time_ms": 1_800_000_000_000,
+            "indicators": {}, "risk": {},
+        }
+        bot = TelegramBot()
+        bot.bot, bot.admin_ids = SuccessBot(), [123]
+        assert await bot.send_signal(signal) is True
+        bot.bot = FailureBot()
+        assert await bot.send_signal(signal) is False
+        bot.bot = None
+        assert await bot.send_signal(signal) is False
+
+    asyncio.run(run())
