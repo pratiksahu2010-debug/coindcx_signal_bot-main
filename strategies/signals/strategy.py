@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 from indicators.ema import ema_series
 from indicators.rsi import rsi
-from indicators.adx import adx
+from indicators.adx import adx, adx_series
 from indicators.vwap import vwap
 from .step_channel import calculate_step_channel
 
@@ -29,6 +29,8 @@ def evaluate_signal(pair, opens, highs, lows, closes, volumes, times,
     day_start=(int(ts[-1])//86_400_000)*86_400_000
     day_idx=int(np.searchsorted(ts,day_start,side="left"))
     vw=vwap(h[day_idx:],l[day_idx:],c[day_idx:],vol[day_idx:],period=None)
+    prev_vw=vwap(h[day_idx:-1],l[day_idx:-1],c[day_idx:-1],vol[day_idx:-1],period=None) if len(c[day_idx:])>1 else None
+    vwap_rising=bool(vw is not None and prev_vw is not None and vw>prev_vw)
     if vw is None: return {"valid":False,"reason":"vwap_unavailable"}
     if direction=="LONG" and not c[-1]>vw or direction=="SHORT" and not c[-1]<vw:
         return {"valid":False,"reason":"wrong_vwap_side"}
@@ -38,6 +40,8 @@ def evaluate_signal(pair, opens, highs, lows, closes, volumes, times,
     adx_result=adx(h,l,c,14)
     if adx_result is None: return {"valid":False,"reason":"adx_unavailable"}
     av,pdi,mdi=adx_result
+    adx_hist=adx_series(h,l,c,14)
+    adx_rising=bool(adx_hist is not None and np.isfinite(adx_hist[0][-1]) and np.isfinite(adx_hist[0][-2]) and adx_hist[0][-1]>adx_hist[0][-2])
     if av<adx_min: return {"valid":False,"reason":"adx_below_minimum"}
     if direction=="LONG" and not pdi>mdi or direction=="SHORT" and not mdi>pdi:
         return {"valid":False,"reason":"wrong_di_direction"}
@@ -66,7 +70,7 @@ def evaluate_signal(pair, opens, highs, lows, closes, volumes, times,
     return {"valid":True,"pair":pair,"direction":direction,"cross_time_ms":int(ts[cross_idx]),
         "cross_age_bars":int(n-1-cross_idx),"candle_time_ms":int(ts[-1]),"close":float(c[-1]),
         "ema9":float(e9[-1]),"ema21":float(e21[-1]),"vwap":float(vw),"rsi":float(rv),
-        "adx":float(av),"plus_di":float(pdi),"minus_di":float(mdi),"atr":float(atr_v),
+        "adx":float(av),"plus_di":float(pdi),"minus_di":float(mdi),"adx_rising":adx_rising,"vwap_rising":vwap_rising,"atr":float(atr_v),
         "vwap_extension_atr":float(vwap_ext),"channel_extension_atr":float(mid_ext),
         "body_ratio":float(body_ratio),"close_location":float(close_loc),"rvol":rvol,
         "step":{"direction":channel.direction,"event":channel.event,"event_time_ms":channel.event_time_ms,
@@ -74,4 +78,6 @@ def evaluate_signal(pair, opens, highs, lows, closes, volumes, times,
             "out_plus":channel.outer_up,"out_minus":channel.outer_down},
         "indicators":{"ema9":float(e9[-1]),"ema21":float(e21[-1]),"vwap":float(vw),
             "rsi":float(rv),"adx":float(av),"plus_di":float(pdi),"minus_di":float(mdi),
-            "atr":float(atr_v),"rvol":rvol}}
+            "atr":float(atr_v),"rvol":rvol,"adx_rising":adx_rising,"vwap_rising":vwap_rising},
+        "state_trace":["WAITING","EMA_CROSS_DETECTED","VWAP_CONFIRMED","RSI_CONFIRMED",
+                       "ADX_CONFIRMED","STEP_CHANNEL_CONFIRMED","ENTRY_VALIDATION","CONFIRMED_SIGNAL"]}
