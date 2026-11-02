@@ -40,6 +40,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     candle_builder = CandleBuilder()
     engine = SignalEngine(rest, symbol_mgr, candle_builder)
+    if database_ready:
+        await engine.restore_active_signals()
 
     # Telegram
     tg = TelegramBot()
