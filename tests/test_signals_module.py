@@ -31,7 +31,7 @@ def test_step_channel_checks_previous_inner_level_then_updates_mid_and_atr():
     assert result.event_time_ms == 60 * 300_000
     assert result.mid == 106.0
     assert result.inner_up > result.mid
-    assert result.inner_up == result.mid + result.atr * 2.5
+    assert result.inner_up == result.mid + result.step_atr * 2.5
 
 
 def test_step_channel_down_event_and_state_persists_until_opposite_break():
