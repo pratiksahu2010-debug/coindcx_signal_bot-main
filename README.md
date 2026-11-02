@@ -84,3 +84,40 @@ Backtest performance is not claimed by this release: live market data and a hist
 - Only aligned, fully closed candles are passed to strategies. The close-publication
   grace period defaults to 3 seconds and is configurable with
   `CANDLE_CLOSE_GRACE_SECONDS`.
+
+
+## Independent Signals strategy module
+
+The optional third engine is controlled by `ENABLE_SIGNALS_ENGINE` (default
+`true`). It scans the unique union of the currently selected Normal top-40
+and Momentum top-80 liquidity universes. It has its own 5-minute scan loop,
+candle cursor, cooldown, signal lifecycle, Telegram template and persistent
+deduplication namespace. The existing Normal and Momentum strategy rules are
+not changed by this module.
+
+Sequential conditions: fresh EMA 9/21 crossover (latest 1-3 completed bars),
+price on the correct side of UTC-session VWAP, directional RSI(14), ADX(14)
+at or above 25 with matching +DI/-DI, and the Step Channel directional state.
+The Step Channel uses ATR(14), SMA(close, 50) initialization, inner multiplier
+2.5 and outer multiplier 4.0. The close is tested against the previous inner
+levels before MID and ATR are updated. The latest state is stored in the
+`step_channel_state` database table and resumed after restart when candle
+history overlaps the saved state.
+
+The 15-minute context is informational only and cannot veto a valid 5-minute
+Signals alert. The module uses completed candles, the existing 120-second
+signal freshness ceiling, fresh ticker entry checks, and the existing risk
+calculator. It never submits orders.
+
+New environment variables:
+- `ENABLE_SIGNALS_ENGINE=true`
+- `SIGNALS_MAX_CROSS_AGE=3`
+- `SIGNALS_ADX_MIN=25.0`
+- `SIGNALS_MAX_VWAP_EXTENSION_ATR=1.5`
+- `SIGNALS_MAX_CHANNEL_EXTENSION_ATR=3.0`
+- `USE_15M_CONTEXT=true`
+
+The initial VWAP/channel extension defaults are configurable starting guards,
+not backtest-calibrated universal thresholds. Run chronological, out-of-sample
+validation before treating them as optimized settings. TradingView numerical
+parity has not been independently verified without reference chart values.
