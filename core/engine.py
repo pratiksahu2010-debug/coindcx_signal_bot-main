@@ -333,7 +333,8 @@ class SignalEngine:
                 "direction": channel.direction, "event": channel.event,
                 "event_time_ms": channel.event_time_ms, "candle_time_ms": ts,
                 "mid": channel.mid, "in_plus": channel.inner_up, "in_minus": channel.inner_down,
-                "out_plus": channel.outer_up, "out_minus": channel.outer_down, "atr": channel.atr,
+                "out_plus": channel.outer_up, "out_minus": channel.outer_down,
+                "atr": channel.atr, "step_atr": channel.step_atr,
             }
             self._step_channel_states[pair] = snapshot
             try:
