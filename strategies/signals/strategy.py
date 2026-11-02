@@ -48,6 +48,8 @@ def evaluate_signal(pair, opens, highs, lows, closes, volumes, times,
     channel=step_channel or calculate_step_channel(h,l,c,ts)
     if channel.direction != ("BULLISH" if direction=="LONG" else "BEARISH"):
         return {"valid":False,"reason":"step_channel_direction"}
+    if (direction=="LONG" and c[-1] < channel.mid) or (direction=="SHORT" and c[-1] > channel.mid):
+        return {"valid":False,"reason":"step_channel_mid_side"}
     if channel.event_time_ms is None or channel.event not in ("UP","DOWN"):
         return {"valid":False,"reason":"step_event_unavailable"}
     atr_v=channel.atr
