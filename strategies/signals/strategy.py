@@ -9,7 +9,7 @@ from .step_channel import calculate_step_channel
 
 def evaluate_signal(pair, opens, highs, lows, closes, volumes, times,
                     max_cross_age=3, adx_min=25.0,
-                    max_vwap_extension_atr=1.5, max_mid_extension_atr=3.0):
+                    max_vwap_extension_atr=1.5, max_mid_extension_atr=3.0, step_channel=None):
     o=np.asarray(opens,dtype=float); h=np.asarray(highs,dtype=float); l=np.asarray(lows,dtype=float)
     c=np.asarray(closes,dtype=float); vol=np.asarray(volumes,dtype=float); ts=np.asarray(times,dtype=np.int64)
     n=len(c)
@@ -41,7 +41,7 @@ def evaluate_signal(pair, opens, highs, lows, closes, volumes, times,
     if av<adx_min: return {"valid":False,"reason":"adx_below_minimum"}
     if direction=="LONG" and not pdi>mdi or direction=="SHORT" and not mdi>pdi:
         return {"valid":False,"reason":"wrong_di_direction"}
-    channel=calculate_step_channel(h,l,c,ts)
+    channel=step_channel or calculate_step_channel(h,l,c,ts)
     if channel.direction != ("BULLISH" if direction=="LONG" else "BEARISH"):
         return {"valid":False,"reason":"step_channel_direction"}
     if channel.event_time_ms is None or channel.event not in ("UP","DOWN"):
