@@ -650,3 +650,36 @@ def test_restore_marks_payload_expired_even_if_db_row_is_recent(tmp_path):
             await test_engine.dispose()
 
     asyncio.run(run())
+
+
+def test_liquidity_refresh_retains_previous_universe_when_ticker_aliases_do_not_match():
+    import asyncio
+    from exchange.symbol_manager import SymbolManager
+
+    class FakeRest:
+        def __init__(self):
+            self.rows = [
+                {"market": "BTCUSDT", "volume": "300", "last_price": "10"},
+                {"market": "ETHUSDT", "volume": "200", "last_price": "10"},
+            ]
+        async def get_market_details(self):
+            return [
+                {"pair": f"B-{name}_USDT", "base_currency_short_name": "USDT",
+                 "target_currency_short_name": name, "coindcx_name": f"{name}USDT",
+                 "status": "active"}
+                for name in ("BTC", "ETH")
+            ]
+        async def get_ticker(self):
+            return self.rows
+
+    async def run():
+        rest = FakeRest()
+        manager = SymbolManager(rest)
+        await manager.load_and_validate()
+        before = list(manager.normal_symbols)
+        rest.rows = [{"market": "UNRELATEDUSDT", "volume": "999", "last_price": "1"}]
+        manager._last_liquidity_refresh = 0
+        await manager.refresh_universes()
+        assert manager.normal_symbols == before
+
+    asyncio.run(run())
