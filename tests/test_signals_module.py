@@ -87,3 +87,21 @@ def test_step_channel_resumes_from_persisted_mid_atr_and_direction():
     assert result.direction == "BULLISH"
     assert result.event == "UP"
     assert result.event_time_ms == 60 * 300_000
+
+
+def test_step_channel_keeps_restored_state_when_latest_candle_is_already_persisted():
+    close = np.full(60, 100.0)
+    high = close + 1.0
+    low = close - 1.0
+    snapshot = {
+        "candle_time_ms": 59 * 300_000, "mid": 103.0, "atr": 2.0,
+        "step_atr": 2.0, "direction": "BULLISH", "event": "UP",
+        "event_time_ms": 55 * 300_000,
+    }
+    result = calculate_step_channel(high, low, close, np.arange(60) * 300_000,
+                                    initial_state=snapshot)
+    assert result.mid == 103.0
+    assert result.direction == "BULLISH"
+    assert result.event == "UP"
+    assert result.event_time_ms == 55 * 300_000
+    assert result.inner_up == 108.0
