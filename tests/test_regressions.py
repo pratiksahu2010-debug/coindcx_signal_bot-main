@@ -683,3 +683,34 @@ def test_liquidity_refresh_retains_previous_universe_when_ticker_aliases_do_not_
         assert manager.normal_symbols == before
 
     asyncio.run(run())
+
+
+def test_scan_loop_waits_for_fresh_boundary_before_first_engine_scan(monkeypatch):
+    import asyncio
+    from core.engine import SignalEngine
+    from config import settings
+
+    class FakeSymbols:
+        async def refresh_universes(self):
+            events.append("refresh")
+
+    async def run():
+        engine = SignalEngine(rest=object(), symbols=FakeSymbols(), candles=object())
+
+        async def wait_for_boundary():
+            events.append("boundary")
+
+        engine._wait_for_next_primary_boundary = wait_for_boundary
+        old_normal = settings.enable_normal_engine
+        old_momentum = settings.enable_momentum_engine
+        settings.enable_normal_engine = False
+        settings.enable_momentum_engine = False
+        try:
+            await engine.run_scan_loop(app=None)
+        finally:
+            settings.enable_normal_engine = old_normal
+            settings.enable_momentum_engine = old_momentum
+
+    events = []
+    asyncio.run(run())
+    assert events == ["refresh", "boundary"]
