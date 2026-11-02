@@ -107,7 +107,7 @@ class SignalEngine:
         self.scan_errors = {"normal": 0, "momentum": 0, "signals": 0}
         self._step_channel_states = {}
         # Independent candle cursors prevent one strategy engine suppressing the other.
-        self._last_processed = {"normal": {}, "momentum": {}}
+        self._last_processed = {"normal": {}, "momentum": {}, "signals": {}}
 
     def set_telegram(self, tg) -> None:
         self.telegram = tg
@@ -177,7 +177,7 @@ class SignalEngine:
         if settings.enable_momentum_engine:
             tasks.append(asyncio.create_task(self._run_engine_loop(app, "momentum")))
         if settings.enable_signals_engine:
-            tasks.append(asyncio.create_task(self._run_engine_loop(app, "signals"))
+            tasks.append(asyncio.create_task(self._run_engine_loop(app, "signals")))
         if settings.enable_signals_engine:
             try:
                 from database.repositories import load_step_channel_states
@@ -239,6 +239,10 @@ class SignalEngine:
                 state["momentum_engine"] = (
                     "running" if settings.enable_momentum_engine and self.symbols.momentum_symbols
                     else "no_symbols" if settings.enable_momentum_engine else "disabled"
+                )
+                state["signals_engine"] = (
+                    "running" if settings.enable_signals_engine and (self.symbols.normal_symbols or self.symbols.momentum_symbols)
+                    else "no_symbols" if settings.enable_signals_engine else "disabled"
                 )
                 state["last_market_update"] = utc_iso(finished)
                 state["uptime_seconds"] = int(
