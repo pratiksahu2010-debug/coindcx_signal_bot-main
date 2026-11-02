@@ -229,6 +229,7 @@ class SignalEngine:
                 state["watchlist_count"] = sum(manager.count() for manager in self.watchlists.values())
                 state["scan_errors_normal"] = self.scan_errors["normal"]
                 state["scan_errors_momentum"] = self.scan_errors["momentum"]
+                state["scan_errors_signals"] = self.scan_errors["signals"]
                 state["valid_symbols_normal"] = len(self.symbols.normal_symbols)
                 state["valid_symbols_momentum"] = len(self.symbols.momentum_symbols)
                 state["eligible_symbols"] = len(self.symbols.valid_pairs)
