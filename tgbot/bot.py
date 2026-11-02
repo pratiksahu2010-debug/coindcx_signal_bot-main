@@ -1,6 +1,7 @@
 """Telegram bot integration — signal delivery + commands."""
 from typing import Optional, List, Any, Dict
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import re
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -145,15 +146,16 @@ class TelegramBot:
             ind = signal.get("indicators") or {}
             risk = signal.get("risk") or {}
             side = "🟢 CONFIRMED LONG SIGNAL" if direction == "LONG" else "🔴 CONFIRMED SHORT SIGNAL"
-            def stamp(value):
+            def stamp(value, ist=False):
                 try:
-                    return datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc).isoformat()
+                    dt = datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc)
+                    return dt.astimezone(ZoneInfo("Asia/Kolkata")).isoformat() if ist else dt.isoformat()
                 except (TypeError, ValueError, OverflowError):
                     return "n/a"
             rows = [
                 side, "", f"Symbol: {pair}", "Exchange: CoinDCX", "Strategy: Sequential EMA 9/21 + Step Channel",
                 "Timeframe: 5m", f"Candle UTC: {stamp(signal.get('candle_time_ms'))}",
-                f"Candle IST: {stamp(signal.get('candle_time_ms'))}",
+                f"Candle IST: {stamp(signal.get('candle_time_ms'), ist=True)}",
                 "", "ENTRY CONFIRMATIONS:",
                 f"EMA 9: {_num(ind.get('ema9'))}", f"EMA 21: {_num(ind.get('ema21'))}",
                 f"EMA crossover UTC: {stamp(signal.get('cross_time_ms'))}",
