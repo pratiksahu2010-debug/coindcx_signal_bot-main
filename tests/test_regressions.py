@@ -227,10 +227,12 @@ def test_ticker_price_lookup_matches_coin_dcx_pair_aliases():
 
     async def run():
         client = CoinDCXRest()
+        import time
+        now_ms = int(time.time() * 1000)
         async def fake_ticker():
             return [
-                {"market": "B-ETH_USDT", "last_price": "2500.5"},
-                {"market": "B-BTC_USDT", "last_price": "65000"},
+                {"market": "B-ETH_USDT", "last_price": "2500.5", "timestamp": now_ms},
+                {"market": "B-BTC_USDT", "last_price": "65000", "timestamp": now_ms},
             ]
         client.get_ticker = fake_ticker
         assert await client.get_last_price("B-BTC_USDT") == 65000.0
@@ -483,5 +485,26 @@ def test_persistent_dedup_claim_prunes_expired_rows(tmp_path):
         finally:
             database_db.engine, database_db.SessionLocal = old_engine, old_factory
             await test_engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_ticker_price_lookup_rejects_stale_or_untimestamped_prices():
+    import asyncio
+    import time
+    from exchange.coindcx_rest import CoinDCXRest
+
+    async def run():
+        client = CoinDCXRest()
+        old_ms = int(time.time() * 1000) - 60_000
+        async def stale_ticker():
+            return [{"market": "B-BTC_USDT", "last_price": "65000", "timestamp": old_ms}]
+        client.get_ticker = stale_ticker
+        assert await client.get_last_price("B-BTC_USDT") is None
+
+        async def missing_timestamp_ticker():
+            return [{"market": "B-BTC_USDT", "last_price": "65000"}]
+        client.get_ticker = missing_timestamp_ticker
+        assert await client.get_last_price("B-BTC_USDT") is None
 
     asyncio.run(run())
