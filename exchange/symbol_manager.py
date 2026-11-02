@@ -231,14 +231,27 @@ class SymbolManager:
             )
             return
 
+        updated_liquidity = {}
         for pair in self.valid_pairs:
             metadata = self.metadata.get(pair, {})
             aliases = (
                 pair, metadata.get("pair"), metadata.get("coindcx_name"),
                 metadata.get("symbol"),
             )
-            volume = max((latest.get(self._norm(alias), 0.0) for alias in aliases), default=0.0)
-            self.liquidity[pair] = volume
+            updated_liquidity[pair] = max(
+                (latest.get(self._norm(alias), 0.0) for alias in aliases), default=0.0
+            )
+        if not any(volume > 0 for volume in updated_liquidity.values()):
+            logger.warning(
+                "Liquidity refresh did not match any discovered markets; retaining prior ranking"
+            )
+            self._last_liquidity_refresh = (
+                __import__("time").time() - self._liquidity_refresh_seconds + 300
+            )
+            return
+
+        self.liquidity.update(updated_liquidity)
+        for pair, volume in updated_liquidity.items():
             if volume <= 0:
                 self.skipped_reasons[pair] = "no matching positive ticker volume"
             else:
