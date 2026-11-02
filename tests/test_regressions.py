@@ -609,3 +609,47 @@ def test_liquidity_universe_reorders_when_24h_volume_changes():
         assert manager.momentum_symbols[0] == "B-ETH_USDT"
 
     asyncio.run(run())
+
+
+def test_restore_marks_payload_expired_even_if_db_row_is_recent(tmp_path):
+    import asyncio
+    import json
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from database import db as database_db
+    from database.db import Base
+    from database import models  # noqa: F401
+    from database.models import SignalRecord
+    from database.repositories import load_active_signals
+
+    async def run():
+        test_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'expired_signal.db'}")
+        old_engine, old_factory = database_db.engine, database_db.SessionLocal
+        database_db.engine = test_engine
+        database_db.SessionLocal = async_sessionmaker(test_engine, class_=AsyncSession, expire_on_commit=False)
+        try:
+            async with test_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            now = datetime.now(timezone.utc)
+            expired_payload = {
+                "pair": "B-ETH_USDT", "engine": "normal", "direction": "SHORT",
+                "created_at": (now - timedelta(hours=2)).isoformat(),
+                "expires_at": (now - timedelta(minutes=1)).isoformat(),
+            }
+            async with database_db.SessionLocal() as session:
+                session.add(SignalRecord(
+                    pair="B-ETH_USDT", engine="normal", direction="SHORT", score=7.5,
+                    grade="SIGNAL", price=100.0, status="active",
+                    payload=json.dumps(expired_payload), created_at=datetime.utcnow(),
+                ))
+                await session.commit()
+            assert await load_active_signals() == []
+            async with database_db.SessionLocal() as session:
+                result = await session.execute(select(SignalRecord))
+                assert result.scalar_one().status == "expired"
+        finally:
+            database_db.engine, database_db.SessionLocal = old_engine, old_factory
+            await test_engine.dispose()
+
+    asyncio.run(run())
