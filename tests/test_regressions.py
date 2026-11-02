@@ -366,3 +366,45 @@ def test_rest_client_rejects_future_open_candles(monkeypatch):
         assert await client.get_candles("B-BTC_USDT", "5m", 10) == []
 
     asyncio.run(run())
+
+
+def test_score_disposition_keeps_watchlist_below_signal_threshold():
+    from core.engine import _score_disposition
+
+    assert _score_disposition(5.99, 7.0) == "REJECT"
+    assert _score_disposition(6.0, 7.0) == "WATCHLIST"
+    assert _score_disposition(6.99, 7.0) == "WATCHLIST"
+    assert _score_disposition(7.0, 7.0) == "SIGNAL"
+    assert _score_disposition(7.5, 8.0) == "WATCHLIST"
+    assert _score_disposition(8.0, 8.0) == "SIGNAL"
+
+
+def test_candle_evaluation_diagnostic_includes_both_timeframes_and_gate_reasons(monkeypatch):
+    from core.engine import SignalEngine
+    from utils import logger as logger_module
+
+    messages = []
+    monkeypatch.setattr(logger_module.logger, "info", lambda message: messages.append(message))
+    engine = SignalEngine(rest=object(), symbols=object(), candles=object())
+    engine._log_candle_evaluation(
+        pair="B-ZEC_USDT", engine="normal", direction="SHORT",
+        candle_ts=1_800_000_000_000, candle_close_ms=1_800_000_300_000,
+        confirm_candle_time_ms=1_800_000_000_000,
+        indicators={
+            "close": 100.0, "ema9": 99.0, "ema21": 101.0,
+            "ema50": 102.0, "vwap": 101.0, "rsi": 42.0,
+            "adx": 31.0, "plus_di": 12.0, "minus_di": 25.0,
+            "macd_hist": -1.2, "rvol": 0.8, "atr_pct": 0.4,
+            "ema_extension_atr": 0.5, "confirm_15m": False,
+            "adx_rising": True, "directional_candle": True,
+        },
+        decision="REJECT", failed=["confirm_15m"], strategy="TREND_CONTINUATION",
+        score=6.8, score_parts="EMA Trend:1/1,RSI:1/1",
+    )
+    assert len(messages) == 1
+    message = messages[0]
+    assert "pair=B-ZEC_USDT" in message
+    assert "candle_close_ms=1800000300000" in message
+    assert "confirm_15m_open_ms=1800000000000" in message
+    assert "failed=confirm_15m" in message
+    assert "score_parts=[EMA Trend:1/1,RSI:1/1]" in message
