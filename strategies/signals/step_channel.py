@@ -72,6 +72,6 @@ def calculate_step_channel(high, low, close, times=None, atr_length=14, inner_mu
             mids[i]=mid; ins[i]=mid+step_atr*inner_mult; ind[i]=mid-step_atr*inner_mult
             outs[i]=mid+step_atr*outer_mult; outd[i]=mid-step_atr*outer_mult
     if not initialized or not np.isfinite(atrs[-1]):
-        return StepChannelResult(None,None,None,None,None,None,"UNKNOWN",None,None,{})
+        return StepChannelResult(None,None,None,None,None,None,None,"UNKNOWN",None,None,{})
     series={"mid":mids,"inner_up":ins,"inner_down":ind,"outer_up":outs,"outer_down":outd}
     return StepChannelResult(float(mids[-1]),float(ins[-1]),float(ind[-1]),float(outs[-1]),float(outd[-1]),float(atrs[-1]),float(step_atr),direction,event,event_time,series)
