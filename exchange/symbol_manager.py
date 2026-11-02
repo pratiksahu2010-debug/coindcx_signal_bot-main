@@ -226,6 +226,9 @@ class SymbolManager:
         latest = self._ticker_liquidity(ticker_rows)
         if not latest:
             logger.warning("Liquidity refresh returned no usable ticker volumes; retaining prior ranking")
+            self._last_liquidity_refresh = (
+                __import__("time").time() - self._liquidity_refresh_seconds + 300
+            )
             return
 
         for pair in self.valid_pairs:
