@@ -37,7 +37,7 @@ async def save_signal(signal: dict) -> bool:
 async def load_active_signals(max_age_hours: int = 4) -> list:
     """Load unexpired active signal payloads for in-memory lifecycle restoration."""
     import json
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from sqlalchemy import select, update
     from database import db as database_db
     from database.models import SignalRecord
@@ -60,15 +60,25 @@ async def load_active_signals(max_age_hours: int = 4) -> list:
                 .order_by(SignalRecord.created_at.desc())
             )
             records = result.scalars().all()
-            await session.commit()
             signals = []
+            now_utc = datetime.now(timezone.utc)
             for record in records:
                 try:
                     signal = json.loads(record.payload or "{}")
+                    expires_at = datetime.fromisoformat(
+                        str(signal.get("expires_at", "")).replace("Z", "+00:00")
+                    )
+                    if expires_at <= now_utc:
+                        record.status = "expired"
+                        continue
                     if signal.get("pair") and signal.get("engine") and signal.get("direction"):
                         signals.append(signal)
+                    else:
+                        record.status = "invalid"
                 except (TypeError, ValueError):
+                    record.status = "invalid"
                     logger.warning(f"Skipping malformed persisted signal row id={record.id}")
+            await session.commit()
             return signals
         except Exception as exc:
             await session.rollback()
