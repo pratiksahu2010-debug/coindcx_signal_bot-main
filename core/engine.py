@@ -18,8 +18,6 @@ from core.signal_manager import SignalManager
 from core.risk_calculator import calculate_risk, is_entry_price_actionable
 from strategies.normal.strategy_manager import detect_strategy
 from strategies.momentum.strategy_manager import detect_momentum_state
-from strategies.signals.strategy import evaluate_signal
-from strategies.signals.step_channel import calculate_step_channel
 from indicators import (
     ema, rsi, atr, adx, macd, vwap, relative_volume,
     bollinger_bands, bandwidth, keltner_channels, roc,
@@ -88,26 +86,22 @@ class SignalEngine:
         self.cooldowns = {
             "normal": CooldownManager(default_seconds=1800),
             "momentum": CooldownManager(default_seconds=1800),
-            "signals": CooldownManager(default_seconds=1800),
         }
         self.watchlists = {
             "normal": WatchlistManager(max_entries=50, ttl_minutes=60),
             "momentum": WatchlistManager(max_entries=50, ttl_minutes=60),
-            "signals": WatchlistManager(max_entries=50, ttl_minutes=60),
         }
         self.signals = {
             "normal": SignalManager(max_active=30, ttl_hours=4),
             "momentum": SignalManager(max_active=30, ttl_hours=4),
-            "signals": SignalManager(max_active=30, ttl_hours=4),
         }
         self._scan_lock = asyncio.Lock()
         self._running = True
         self.last_scan_time: Optional[datetime] = None
         self.telegram = None
-        self.scan_errors = {"normal": 0, "momentum": 0, "signals": 0}
-        self._step_channel_states = {}
+        self.scan_errors = {"normal": 0, "momentum": 0}
         # Independent candle cursors prevent one strategy engine suppressing the other.
-        self._last_processed = {"normal": {}, "momentum": {}, "signals": {}}
+        self._last_processed = {"normal": {}, "momentum": {}}
 
     def set_telegram(self, tg) -> None:
         self.telegram = tg
@@ -171,27 +165,17 @@ class SignalEngine:
         # 120-second signal-age limit. Start on the next usable close boundary.
         await self._wait_for_next_primary_boundary()
 
-        if settings.enable_signals_engine:
-            try:
-                from database.repositories import load_step_channel_states
-                self._step_channel_states = await load_step_channel_states()
-                logger.info(f"STEP_CHANNEL_STATES_RESTORED count={len(self._step_channel_states)}")
-            except Exception as exc:
-                logger.warning(f"Step Channel state restore unavailable: {exc}")
-
         tasks = []
         if settings.enable_normal_engine:
             tasks.append(asyncio.create_task(self._run_engine_loop(app, "normal")))
         if settings.enable_momentum_engine:
             tasks.append(asyncio.create_task(self._run_engine_loop(app, "momentum")))
-        if settings.enable_signals_engine:
-            tasks.append(asyncio.create_task(self._run_engine_loop(app, "signals")))
         if tasks:
             await asyncio.gather(*tasks)
 
     async def _run_engine_loop(self, app: Any, engine: str) -> None:
         """Scan one strategy engine without waiting for the other engine."""
-        if engine not in ("normal", "momentum", "signals"):
+        if engine not in ("normal", "momentum"):
             raise ValueError(f"Unknown strategy engine: {engine}")
 
         while self._running:
@@ -207,13 +191,10 @@ class SignalEngine:
                     await self._scan_normal()
                 elif engine == "momentum":
                     await self._scan_momentum()
-                else:
-                    await self._scan_signals()
 
                 # Universe refresh is serialized through the Normal loop; if
                 # Normal is disabled, Momentum owns refresh responsibility.
-                if (engine == "normal" or (engine == "momentum" and not settings.enable_normal_engine)
-                    or (engine == "signals" and not settings.enable_normal_engine and not settings.enable_momentum_engine)):
+                if engine == "normal" or (engine == "momentum" and not settings.enable_normal_engine):
                     await self.symbols.refresh_universes()
 
                 finished = utc_now()
@@ -229,7 +210,6 @@ class SignalEngine:
                 state["watchlist_count"] = sum(manager.count() for manager in self.watchlists.values())
                 state["scan_errors_normal"] = self.scan_errors["normal"]
                 state["scan_errors_momentum"] = self.scan_errors["momentum"]
-                state["scan_errors_signals"] = self.scan_errors["signals"]
                 state["valid_symbols_normal"] = len(self.symbols.normal_symbols)
                 state["valid_symbols_momentum"] = len(self.symbols.momentum_symbols)
                 state["eligible_symbols"] = len(self.symbols.valid_pairs)
@@ -241,10 +221,6 @@ class SignalEngine:
                 state["momentum_engine"] = (
                     "running" if settings.enable_momentum_engine and self.symbols.momentum_symbols
                     else "no_symbols" if settings.enable_momentum_engine else "disabled"
-                )
-                state["signals_engine"] = (
-                    "running" if settings.enable_signals_engine and (self.symbols.normal_symbols or self.symbols.momentum_symbols)
-                    else "no_symbols" if settings.enable_signals_engine else "disabled"
                 )
                 state["last_market_update"] = utc_iso(finished)
                 state["uptime_seconds"] = int(
@@ -296,202 +272,7 @@ class SignalEngine:
     async def _scan_momentum(self) -> None:
         await self._scan_pairs(self.symbols.momentum_symbols, "momentum")
 
-    async def _scan_signals(self) -> None:
-        # Run on the union of the already-selected top-40 and top-80 lists.
-        # This is independent of the legacy engines but does not rediscover markets.
-        pairs = list(dict.fromkeys(self.symbols.normal_symbols + self.symbols.momentum_symbols))
-        await self._scan_pairs(pairs, "signals")
-
-    async def _process_signals_pair(self, pair: str) -> None:
-        """Independent strict sequential EMA/VWAP/RSI/ADX/Step Channel scanner."""
-        primary = settings.candle_primary_tf
-        data = await self.rest.get_candles(pair, primary, limit=PRIMARY_CANDLE_HISTORY)
-        if len(data) < 60:
-            return
-        self.candles.seed(pair, primary, data)
-        arr = self.candles.get_arrays(pair, primary)
-        if not arr or len(arr["close"]) < 60:
-            return
-        ts = int(arr["time"][-1])
-        interval_ms = int(parse_interval(primary).total_seconds() * 1000)
-        close_ms = ts + interval_ms
-        await self._update_signal_outcomes(pair, "signals", float(arr["high"][-1]), float(arr["low"][-1]))
-        if self._last_processed.setdefault("signals", {}).get(pair) == ts:
-            return
-        age = candle_age_seconds(int(utc_now().timestamp() * 1000), ts, interval_ms)
-        if age < 0 or age > settings.max_signal_age_seconds:
-            self._last_processed["signals"][pair] = ts
-            logger.info(f"STALE_CANDLE_SKIP {pair} engine=signals candle_open_ms={ts} age_seconds={age:.1f}")
-            return
-
-        channel = calculate_step_channel(
-            arr["high"], arr["low"], arr["close"], arr["time"],
-            initial_state=self._step_channel_states.get(pair),
-        )
-        if channel.mid is not None:
-            snapshot = {
-                "direction": channel.direction, "event": channel.event,
-                "event_time_ms": channel.event_time_ms, "candle_time_ms": ts,
-                "mid": channel.mid, "in_plus": channel.inner_up, "in_minus": channel.inner_down,
-                "out_plus": channel.outer_up, "out_minus": channel.outer_down,
-                "atr": channel.atr, "step_atr": channel.step_atr,
-            }
-            self._step_channel_states[pair] = snapshot
-            try:
-                from database.repositories import save_step_channel_state
-                await save_step_channel_state(pair, snapshot)
-            except Exception as exc:
-                logger.warning(f"STEP_CHANNEL_STATE_SAVE_FAILED {pair}: {exc}")
-
-        result = evaluate_signal(
-            pair, arr["open"], arr["high"], arr["low"], arr["close"], arr["volume"], arr["time"],
-            max_cross_age=max(1, min(3, int(settings.signals_max_cross_age))),
-            adx_min=float(settings.signals_adx_min),
-            max_vwap_extension_atr=float(settings.signals_max_vwap_extension_atr),
-            max_mid_extension_atr=float(settings.signals_max_channel_extension_atr),
-            step_channel=channel,
-        )
-        if not result.get("valid"):
-            logger.info(
-                f"SIGNALS_EVAL pair={pair} decision=REJECT reason={result.get('reason')} "
-                f"candle_open_ms={ts} candle_close_ms={close_ms} age_seconds={age:.1f}"
-            )
-            self._last_processed["signals"][pair] = ts
-            return
-
-        direction = result["direction"]
-        # Optional 15m context is descriptive only and can never veto a 5m signal.
-        context = {"state": "UNAVAILABLE", "role": "INFORMATIONAL ONLY", "alignment": "UNAVAILABLE",
-                   "candle_time_ms": None}
-        if settings.use_15m_context:
-            try:
-                conf = await self.rest.get_candles(pair, settings.candle_confirm_tf, limit=CONFIRM_CANDLE_HISTORY)
-                if len(conf) >= 55:
-                    self.candles.seed(pair, settings.candle_confirm_tf, conf)
-                    ca = self.candles.get_arrays(pair, settings.candle_confirm_tf)
-                    ci = latest_asof_candle_index(
-                        np.asarray(ca["time"], dtype=np.int64),
-                        int(parse_interval(settings.candle_confirm_tf).total_seconds() * 1000),
-                        close_ms,
-                    )
-                    if ci is not None:
-                        cc = np.asarray(ca["close"][:ci+1], dtype=float)
-                        ch = np.asarray(ca["high"][:ci+1], dtype=float)
-                        cl = np.asarray(ca["low"][:ci+1], dtype=float)
-                        cv = np.asarray(ca["volume"][:ci+1], dtype=float)
-                        ct = np.asarray(ca["time"][:ci+1], dtype=np.int64)
-                        cday = (int(ct[-1]) // 86_400_000) * 86_400_000
-                        cidx = int(np.searchsorted(ct, cday, side="left"))
-                        cvwap = vwap(ch[cidx:], cl[cidx:], cc[cidx:], cv[cidx:], period=None)
-                        ce9, ce21 = ema(cc, 9), ema(cc, 21)
-                        state = "NEUTRAL"
-                        if ce9 is not None and ce21 is not None and ce9 > ce21 and cvwap is not None and cc[-1] > cvwap:
-                            state = "BULLISH"
-                        elif ce9 is not None and ce21 is not None and ce9 < ce21 and cvwap is not None and cc[-1] < cvwap:
-                            state = "BEARISH"
-                        aligned = (direction == "LONG" and state == "BULLISH") or (direction == "SHORT" and state == "BEARISH")
-                        opposed = (direction == "LONG" and state == "BEARISH") or (direction == "SHORT" and state == "BULLISH")
-                        context = {"state": state, "role": "INFORMATIONAL ONLY",
-                                   "alignment": "SUPPORTIVE" if aligned else "OPPOSING" if opposed else "NEUTRAL",
-                                   "candle_time_ms": int(ct[-1])}
-            except Exception as exc:
-                logger.warning(f"SIGNALS_15M_CONTEXT_UNAVAILABLE {pair}: {exc}")
-
-        swing_low = float(np.min(arr["low"][-8:-1])) if len(arr["low"]) >= 8 else None
-        swing_high = float(np.max(arr["high"][-8:-1])) if len(arr["high"]) >= 8 else None
-        risk = calculate_risk(float(result["close"]), float(result["atr"]), direction,
-                              swing_low=swing_low, swing_high=swing_high)
-        if not risk or risk.rr1 <= 0 or risk.rr2 <= 0:
-            self._last_processed["signals"][pair] = ts
-            logger.info(f"SIGNALS_EVAL pair={pair} decision=REJECT reason=risk_invalid")
-            return
-        if self.cooldowns["signals"].is_cooling(pair, "signals", direction):
-            self._last_processed["signals"][pair] = ts
-            return
-
-        signal = {
-            "pair": pair, "display": self.symbols.display_name(pair), "direction": direction,
-            "engine": "signals", "strategy": "Sequential EMA 9/21 + VWAP + RSI + ADX + Step Channel",
-            "score": 10.0, "grade": "CONFIRMED", "price": result["close"],
-            "timestamp": utc_iso(utc_now()), "candle_time_ms": ts, "candle_close_time_ms": close_ms,
-            "signal_age_seconds": round(age, 1), "cross_time_ms": result["cross_time_ms"],
-            "cross_age_bars": result["cross_age_bars"], "step": result["step"],
-            "confirmation_status": "CONFIRMED_SIGNAL",
-            "state_machine": result.get("state_trace", []),
-            "duplicate_key": f"signals:{pair}:{direction}:{ts}",
-            "context_15m": context, "indicators": result["indicators"],
-            "quality": {"body_ratio": result["body_ratio"], "close_location": result["close_location"],
-                        "rvol": result["rvol"],
-                        "volume_status": "AVAILABLE" if result["rvol"] is not None else "UNAVAILABLE",
-                        "vwap_rising": result.get("vwap_rising", False),
-                        "adx_rising": result.get("adx_rising", False),
-                        "vwap_extension_atr": result["vwap_extension_atr"],
-                        "channel_extension_atr": result["channel_extension_atr"],
-                        "checklist": ["EMA crossover fresh", "VWAP side confirmed", "RSI direction confirmed",
-                                      "ADX >= configured minimum", "DI direction confirmed",
-                                      "Step Channel direction confirmed", "entry quality passed"]},
-        }
-        signal["risk"] = {
-            "entry": risk.entry, "entry_zone": [risk.entry_zone_low, risk.entry_zone_high],
-            "stop_loss": risk.stop_loss, "tp1": risk.tp1, "tp2": risk.tp2, "tp3": risk.tp3,
-            "risk_pct": risk.risk_pct, "rr": [risk.rr1, risk.rr2, risk.rr3],
-        }
-        final_age = candle_age_seconds(int(utc_now().timestamp() * 1000), ts, interval_ms)
-        if final_age < 0 or final_age > settings.max_signal_age_seconds:
-            self._last_processed["signals"][pair] = ts
-            logger.info(f"STALE_SIGNAL_SUPPRESSED {pair} engine=signals age_seconds={final_age:.1f}")
-            return
-        live_price = await self.rest.get_last_price(pair)
-        if live_price is None or not is_entry_price_actionable(live_price, risk.entry_zone_low, risk.entry_zone_high):
-            self._last_processed["signals"][pair] = ts
-            logger.info(f"ENTRY_MOVED_SKIP {pair} engine=signals live_price={live_price}")
-            return
-        signal["live_price"] = live_price
-        signal["entry_checked_at"] = utc_iso(utc_now())
-        signal["signal_age_seconds"] = round(final_age, 1)
-        self._last_processed["signals"][pair] = ts
-        if not self.signals["signals"].add(signal):
-            return
-        try:
-            from database.repositories import claim_signal_once
-            claimed = await claim_signal_once(signal, ts, ttl_hours=4)
-        except Exception as exc:
-            logger.error(f"SIGNALS_DEDUP_UNAVAILABLE {pair}: {exc}")
-            claimed = False
-        if not claimed:
-            self.signals["signals"].invalidate(pair, "signals", direction)
-            return
-        # Recheck the market price and candle age immediately before Telegram delivery.
-        delivery_price = await self.rest.get_last_price(pair)
-        delivery_age = candle_age_seconds(int(utc_now().timestamp() * 1000), ts, interval_ms)
-        if (delivery_price is None or not is_entry_price_actionable(
-                delivery_price, risk.entry_zone_low, risk.entry_zone_high)
-                or delivery_age < 0 or delivery_age > settings.max_signal_age_seconds):
-            self.signals["signals"].invalidate(pair, "signals", direction)
-            logger.info(f"SIGNALS_DELIVERY_VALIDATION_FAILED {pair} price={delivery_price} age={delivery_age:.1f}")
-            return
-        signal["live_price"] = delivery_price
-        signal["signal_age_seconds"] = round(delivery_age, 1)
-        delivered = False
-        if self.telegram:
-            try:
-                delivered = bool(await self.telegram.send_signal(signal))
-            except Exception as exc:
-                logger.error(f"Signals Telegram delivery failed for {pair}: {exc}")
-        if delivered:
-            self.cooldowns["signals"].set(pair, "signals", direction)
-            from database.repositories import save_signal
-            if not await save_signal(signal):
-                logger.error(f"SIGNALS_ACTIVE_STATE_SAVE_FAILED {pair}")
-            logger.info(f"SIGNAL_DELIVERED engine=signals pair={pair} direction={direction} candle_open_ms={ts}")
-        else:
-            self.signals["signals"].invalidate(pair, "signals", direction)
-            logger.warning(f"SIGNALS_NOT_DELIVERED {pair}; no cooldown started")
-
     async def _process_pair(self, pair: str, engine: str) -> None:
-        if engine == "signals":
-            await self._process_signals_pair(pair)
-            return
         # Refresh primary TF candles
         primary = settings.candle_primary_tf
         data = await self.rest.get_candles(pair, primary, limit=PRIMARY_CANDLE_HISTORY)
