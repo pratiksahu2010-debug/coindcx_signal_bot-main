@@ -106,6 +106,22 @@ class SignalEngine:
     def set_telegram(self, tg) -> None:
         self.telegram = tg
 
+    async def restore_active_signals(self) -> int:
+        """Rehydrate active signal lifecycle state from the configured database."""
+        try:
+            from database.repositories import load_active_signals
+            records = await load_active_signals(max_age_hours=4)
+        except Exception as exc:
+            logger.error(f"Active signal restore failed: {exc}")
+            return 0
+        restored = 0
+        for signal in records:
+            engine = signal.get("engine")
+            if engine in self.signals and self.signals[engine].restore(signal):
+                restored += 1
+        logger.info(f"ACTIVE_SIGNALS_RESTORED count={restored}")
+        return restored
+
     async def _wait_for_next_primary_boundary(self) -> None:
         interval_ms = int(parse_interval(settings.candle_primary_tf).total_seconds() * 1000)
         grace_ms = max(0, int(settings.candle_close_grace_seconds)) * 1000
@@ -269,7 +285,7 @@ class SignalEngine:
         candle_close_ms = candle_ts + primary_interval_ms
         # Update active signal outcomes on every fresh closed candle before deciding
         # whether this engine has already evaluated the candle.
-        self._update_signal_outcomes(pair, engine, float(high[-1]), float(low[-1]))
+        await self._update_signal_outcomes(pair, engine, float(high[-1]), float(low[-1]))
         if self._last_processed.setdefault(engine, {}).get(pair) == candle_ts:
             return
         initial_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
@@ -706,6 +722,14 @@ class SignalEngine:
                         f"live_price={signal.get('live_price')} "
                         f"confirm_15m_open_ms={signal.get('confirm_candle_time_ms')}"
                     )
+                    persisted_signal = self.signals[engine].get(pair, engine, direction)
+                    if persisted_signal:
+                        try:
+                            from database.repositories import save_signal
+                            if not await save_signal(persisted_signal):
+                                logger.error(f"ACTIVE_SIGNAL_PERSIST_FAILED {pair} engine={engine}")
+                        except Exception as exc:
+                            logger.error(f"ACTIVE_SIGNAL_PERSIST_ERROR {pair}: {exc}")
                 else:
                     self.signals[engine].invalidate(pair, engine, direction)
                     logger.warning(
@@ -759,7 +783,7 @@ class SignalEngine:
             f"score_parts=[{score_parts}] failed={','.join(failed) if failed else 'none'}"
         )
 
-    def _update_signal_outcomes(self, pair: str, engine: str, high: float, low: float) -> None:
+    async def _update_signal_outcomes(self, pair: str, engine: str, high: float, low: float) -> None:
         """Conservatively monitor active alerts; if SL and TP touch same bar, SL wins."""
         for sig in self.signals[engine].list_active():
             if sig.get("pair") != pair:
@@ -771,12 +795,25 @@ class SignalEngine:
                 continue
             sl_hit = low <= sl if direction == "LONG" else high >= sl
             if sl_hit:
-                self.signals[engine].mark_sl(pair, engine, direction)
+                if self.signals[engine].mark_sl(pair, engine, direction):
+                    try:
+                        from database.repositories import update_signal_record
+                        await update_signal_record(sig, "closed_sl")
+                    except Exception as exc:
+                        logger.error(f"Persist SL outcome failed for {pair}: {exc}")
                 continue
             hits = [i for i, target in enumerate((t1, t2, t3), 1)
                     if target is not None and (high >= target if direction == "LONG" else low <= target)]
             for level in hits:
                 self.signals[engine].mark_tp(pair, engine, direction, level)
+            if hits:
+                current = self.signals[engine].get(pair, engine, direction) or sig
+                status = current.get("status", "active")
+                try:
+                    from database.repositories import update_signal_record
+                    await update_signal_record(current, status)
+                except Exception as exc:
+                    logger.error(f"Persist TP outcome failed for {pair}: {exc}")
 
     async def shutdown(self) -> None:
         self._running = False
