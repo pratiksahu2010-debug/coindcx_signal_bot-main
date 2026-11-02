@@ -65,3 +65,25 @@ def test_pine_atr_uses_first_true_range_in_sma_seed():
     assert np.isnan(got[1])
     assert got[2] == 2.0
     assert got[3] == 2.0
+
+
+def test_step_channel_resumes_from_persisted_mid_atr_and_direction():
+    close = np.full(61, 100.0)
+    high = close + 1.0
+    low = close - 1.0
+    close[60] = 106.0
+    high[60] = 107.0
+    low[60] = 99.0
+    snapshot = {
+        "candle_time_ms": 59 * 300_000,
+        "mid": 100.0,
+        "atr": 2.0,
+        "direction": "UNKNOWN",
+        "event": None,
+        "event_time_ms": None,
+    }
+    result = calculate_step_channel(high, low, close, np.arange(61) * 300_000,
+                                    initial_state=snapshot)
+    assert result.direction == "BULLISH"
+    assert result.event == "UP"
+    assert result.event_time_ms == 60 * 300_000
