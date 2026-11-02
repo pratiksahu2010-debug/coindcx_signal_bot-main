@@ -128,6 +128,11 @@ class SignalEngine:
                     # Refresh independent Normal/Momentum top-N lists after the
                     # scan has recorded any repeated stale candle-feed failures.
                     await self.symbols.refresh_universes()
+                    state = app.state.bot_state
+                    state["valid_symbols_normal"] = len(self.symbols.normal_symbols)
+                    state["valid_symbols_momentum"] = len(self.symbols.momentum_symbols)
+                    state["eligible_symbols"] = len(self.symbols.valid_pairs)
+                    state["skipped_symbols"] = len(self.symbols.skipped_reasons)
                     duration_ms = int((utc_now() - start).total_seconds() * 1000)
                     self.last_scan_time = utc_now()
 
