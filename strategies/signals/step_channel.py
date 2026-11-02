@@ -12,6 +12,7 @@ class StepChannelResult:
     outer_up: Optional[float]
     outer_down: Optional[float]
     atr: Optional[float]
+    step_atr: Optional[float]
     direction: str
     event: Optional[str]
     event_time_ms: Optional[int]
@@ -33,7 +34,7 @@ def calculate_step_channel(high, low, close, times=None, atr_length=14, inner_mu
     h=np.asarray(high,dtype=np.float64); l=np.asarray(low,dtype=np.float64); c=np.asarray(close,dtype=np.float64); n=len(c)
     mids=np.full(n,np.nan); ins=np.full(n,np.nan); ind=np.full(n,np.nan); outs=np.full(n,np.nan); outd=np.full(n,np.nan)
     if len(h)!=n or len(l)!=n or n<max(atr_length,base_length):
-        return StepChannelResult(None,None,None,None,None,None,"UNKNOWN",None,None,{})
+        return StepChannelResult(None,None,None,None,None,None,None,"UNKNOWN",None,None,{})
     atrs=pine_atr_series(h,l,c,atr_length); ts=np.asarray(times,dtype=np.int64) if times is not None else np.arange(n,dtype=np.int64)
     initialized=False; mid=None; step_atr=None; direction="UNKNOWN"; event=None; event_time=None
     start_index=0
@@ -42,7 +43,7 @@ def calculate_step_channel(high, low, close, times=None, atr_length=14, inner_mu
     try:
         saved_time = int(saved.get("candle_time_ms") or 0)
         saved_mid = float(saved.get("mid"))
-        saved_atr = float(saved.get("atr"))
+        saved_atr = float(saved.get("step_atr", saved.get("atr")) )
         if saved_time and saved_time < int(ts[-1]) and int(ts[0]) <= saved_time:
             mid=saved_mid; step_atr=saved_atr; initialized=True
             direction=str(saved.get("direction") or "UNKNOWN")
@@ -73,4 +74,4 @@ def calculate_step_channel(high, low, close, times=None, atr_length=14, inner_mu
     if not initialized or not np.isfinite(atrs[-1]):
         return StepChannelResult(None,None,None,None,None,None,"UNKNOWN",None,None,{})
     series={"mid":mids,"inner_up":ins,"inner_down":ind,"outer_up":outs,"outer_down":outd}
-    return StepChannelResult(float(mids[-1]),float(ins[-1]),float(ind[-1]),float(outs[-1]),float(outd[-1]),float(atrs[-1]),direction,event,event_time,series)
+    return StepChannelResult(float(mids[-1]),float(ins[-1]),float(ind[-1]),float(outs[-1]),float(outd[-1]),float(atrs[-1]),float(step_atr),direction,event,event_time,series)
