@@ -124,13 +124,7 @@ class SignalEngine:
             try:
                 async with self._scan_lock:
                     start = utc_now()
-                    tasks = []
-                    if settings.enable_normal_engine:
-                        tasks.append(self._scan_normal())
-                    if settings.enable_momentum_engine:
-                        tasks.append(self._scan_momentum())
-                    if tasks:
-                        await asyncio.gather(*tasks)
+                    await self._run_enabled_scans()
                     # Refresh independent Normal/Momentum top-N lists after the
                     # scan has recorded any repeated stale candle-feed failures.
                     await self.symbols.refresh_universes()
@@ -209,6 +203,20 @@ class SignalEngine:
             f"errors_this_cycle={self.scan_errors[engine] - errors_before} "
             f"active_signals={active} watchlist={watching} duration_ms={duration_ms}"
         )
+
+    async def _run_enabled_scans(self) -> None:
+        """Give the actionable Normal scanner first access to the shared REST limit.
+
+        Normal and Momentum often scan overlapping markets. Running both lists
+        concurrently made 80 Momentum symbols compete with the 40-symbol Normal
+        list for the same five-request REST semaphore, delaying Normal decisions.
+        Normal-first ordering reduces avoidable contention without changing any
+        strategy gate, candle timestamp, or signal freshness limit.
+        """
+        if settings.enable_normal_engine:
+            await self._scan_normal()
+        if settings.enable_momentum_engine:
+            await self._scan_momentum()
 
     async def _scan_normal(self) -> None:
         await self._scan_pairs(self.symbols.normal_symbols, "normal")
