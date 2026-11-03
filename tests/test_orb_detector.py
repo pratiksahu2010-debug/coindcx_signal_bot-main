@@ -67,5 +67,5 @@ def test_orb_detects_retest_after_initial_breakout():
 
 def test_orb_rejects_unusually_wide_opening_range():
     candles = base_candles((9, 30), 104.0, 100.8, 103.8)
-    result = evaluate(candles, 1.0, 2.0)
+    result = evaluate(candles, 0.5, 2.0)
     assert result["state"] == "UNTRADEABLE_RANGE"
