@@ -31,12 +31,41 @@ CONFIRM_CANDLE_HISTORY = 120
 
 
 def _score_disposition(score: float, signal_threshold: float) -> str:
-    """Classify scores without allowing watchlist scores to become alerts."""
+    """Classify momentum scores without allowing watchlist scores to become alerts."""
     if score >= max(7.0, signal_threshold):
         return "SIGNAL"
     if score >= 6.0:
         return "WATCHLIST"
     return "REJECT"
+
+
+def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min: float) -> Dict[str, bool]:
+    """The six explicit Normal Engine approval conditions; no candle-shape gate."""
+    is_long = direction == "LONG"
+    ema9, ema21 = indicators.get("ema9"), indicators.get("ema21")
+    price, vwap_value = indicators.get("close"), indicators.get("vwap")
+    macd_hist, rsi_value = indicators.get("macd_hist"), indicators.get("rsi")
+    adx_value = indicators.get("adx")
+    return {
+        "ema_alignment": (
+            ema9 is not None and ema21 is not None
+            and ((ema9 > ema21) if is_long else (ema9 < ema21))
+        ),
+        "price_vwap": (
+            price is not None and vwap_value is not None
+            and ((price > vwap_value) if is_long else (price < vwap_value))
+        ),
+        "adx_min": adx_value is not None and adx_value >= adx_min,
+        "context_15m": bool(indicators.get("confirm_15m")),
+        "macd_direction": (
+            macd_hist is not None
+            and ((macd_hist > 0) if is_long else (macd_hist < 0))
+        ),
+        "rsi_direction": (
+            rsi_value is not None
+            and ((rsi_value > 50.0) if is_long else (rsi_value < 50.0))
+        ),
+    }
 
 
 def _macd_hist_history(closes: Any, points: int = 4) -> List[float]:
@@ -375,19 +404,13 @@ class SignalEngine:
                 c_low = c_low[:0]
                 c_vol = c_vol[:0]
                 c_times = c_times[:0]
-            c_ema9, c_ema21, c_ema50 = ema(c_close, 9), ema(c_close, 21), ema(c_close, 50)
+            c_ema9, c_ema21 = ema(c_close, 9), ema(c_close, 21)
             confirm_candle_time_ms = int(c_times[-1]) if c_times.size else None
-            c_day_start = (int(c_times[-1]) // 86_400_000) * 86_400_000 if len(c_times) else 0
-            c_day_idx = int(np.searchsorted(c_times, c_day_start, side="left")) if len(c_times) else 0
-            c_vwap = (
-                vwap(c_high[c_day_idx:], c_low[c_day_idx:], c_close[c_day_idx:], c_vol[c_day_idx:], period=None)
-                if c_close.size > 0 and c_high.size == c_close.size
-                and c_low.size == c_close.size and c_vol.size == c_close.size
-                else None
-            )
-            if all(v is not None for v in (c_ema9, c_ema21, c_ema50, c_vwap)) and c_close.size >= 2:
-                confirm_long = c_ema9 > c_ema21 > c_ema50 and c_close[-1] > c_vwap and c_ema9 > ema(c_close[:-1],9)
-                confirm_short = c_ema9 < c_ema21 < c_ema50 and c_close[-1] < c_vwap and c_ema9 < ema(c_close[:-1],9)
+            # Keep the higher-timeframe context deliberately simple: 15m EMA9/21
+            # direction only. No EMA50, VWAP, or slope requirement is added.
+            if c_ema9 is not None and c_ema21 is not None:
+                confirm_long = c_ema9 > c_ema21
+                confirm_short = c_ema9 < c_ema21
 
         # Market structure: last close must break the prior confirmed swing.
         structure_ok = False
@@ -426,12 +449,13 @@ class SignalEngine:
             "rsi_prev": rsi(close[:-1],14),
         }
 
-        # Determine direction
+        # Determine direction from EMA9/EMA21 only. VWAP is evaluated as its
+        # own mandatory gate below; candle direction/body is not a gate.
         direction = None
-        if ema9 is not None and ema21 is not None and vwap_v is not None:
-            if ema9 > ema21 and close[-1] > vwap_v and signed_body > 0:
+        if ema9 is not None and ema21 is not None:
+            if ema9 > ema21:
                 direction = "LONG"
-            elif ema9 < ema21 and close[-1] < vwap_v and signed_body < 0:
+            elif ema9 < ema21:
                 direction = "SHORT"
 
         if not direction:
@@ -447,6 +471,12 @@ class SignalEngine:
             macd_hist is not None and (
                 (direction == "LONG" and macd_hist > 0) or
                 (direction == "SHORT" and macd_hist < 0)
+            )
+        )
+        indicators["rsi_direction_ok"] = bool(
+            rsi_v is not None and (
+                (direction == "LONG" and rsi_v > 50.0) or
+                (direction == "SHORT" and rsi_v < 50.0)
             )
         )
         indicators["confirm_15m"] = confirm_long if direction == "LONG" else confirm_short
@@ -465,25 +495,27 @@ class SignalEngine:
             (direction == "SHORT" and close_location <= 0.35 and signed_body < 0))
 
         if engine == "normal":
-            # Evaluate strategy and every hard gate before returning so a missed
-            # early setup can be reconstructed from one candle-level diagnostic.
+            # Exactly six mandatory Normal Engine conditions. Strategy labels,
+            # candle shape, DI, ADX slope, EMA50 and extra 15m filters are not gates.
             strategy = detect_strategy(indicators, direction)
-            gates = {
-                "adx_min": adx_v is not None and adx_v >= settings.normal_adx_min,
-                "confirm_15m": bool(indicators["confirm_15m"]),
-                "di_direction": bool(indicators["di_direction_ok"]),
-                "macd_direction": bool(indicators["macd_direction_ok"]),
-                "adx_rising_or_30": bool(indicators["adx_rising"] or (adx_v is not None and adx_v >= 30)),
-                "not_chasing": bool(indicators["not_chasing"]),
-                "directional_candle": bool(indicators["directional_candle"]),
-                "strategy_classified": strategy != "UNCLASSIFIED",
-            }
+            if strategy == "UNCLASSIFIED":
+                strategy = "EMA_VWAP_TREND"
+            gates = _normal_threshold_gates(indicators, direction, settings.normal_adx_min)
             failed = [name for name, passed in gates.items() if not passed]
             if failed:
                 self._log_candle_evaluation(
                     pair, engine, direction, candle_ts, candle_close_ms,
                     confirm_candle_time_ms, indicators, "REJECT", failed=failed,
                     strategy=strategy,
+                )
+                return
+            # Keep anti-chasing as a separate entry-safety rule, not a seventh
+            # indicator threshold.
+            if not indicators["not_chasing"]:
+                self._log_candle_evaluation(
+                    pair, engine, direction, candle_ts, candle_close_ms,
+                    confirm_candle_time_ms, indicators, "REJECT",
+                    failed=["anti_chasing"], strategy=strategy,
                 )
                 return
             result = self.normal_scoring.score_normal(indicators, direction)
@@ -571,7 +603,7 @@ class SignalEngine:
         score_parts = ",".join(
             f"{c.name}:{c.points:g}/{c.max_points:g}" for c in result.components
         )
-        if result.total < 6.0:
+        if engine == "momentum" and result.total < 6.0:
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
                 confirm_candle_time_ms, indicators, "REJECT",
@@ -633,7 +665,12 @@ class SignalEngine:
                 "invalidation": risk.invalidation,
             }
 
-        disposition = _score_disposition(result.total, settings.signal_threshold)
+        # Normal signals are qualified by the six explicit gates plus separate
+        # risk/entry safety checks. Scoring is informational, not a hidden gate.
+        disposition = (
+            "SIGNAL" if engine == "normal"
+            else _score_disposition(result.total, settings.signal_threshold)
+        )
         if disposition == "SIGNAL":
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
