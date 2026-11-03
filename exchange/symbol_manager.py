@@ -190,23 +190,39 @@ class SymbolManager:
         momentum_rank = {self._norm(s): i for i, s in enumerate(momentum_preferences)}
 
         def rank_universe(preferences: Dict[str, int], limit: int, label: str) -> List[str]:
+            # Momentum/ORB share an exact static configured whitelist. Do not
+            # silently replace unavailable configured instruments with unrelated markets.
+            if label == "Momentum":
+                configured = list(preferences.keys())
+                available_by_key = {self._norm(pair): pair for pair in self.valid_pairs}
+                selected = []
+                missing = []
+                for key in configured:
+                    pair = available_by_key.get(key)
+                    if pair:
+                        selected.append(pair)
+                    else:
+                        missing.append(key)
+                if missing:
+                    logger.warning(
+                        f"MOMENTUM_WHITELIST_UNAVAILABLE count={len(missing)} "
+                        f"symbols={','.join(missing)}"
+                    )
+                return selected[:limit]
+
             pairs = list(self.valid_pairs)
             has_liquidity = any(self.liquidity.get(pair, 0) > 0 for pair in pairs)
             if has_liquidity:
-                missing_volume = [pair for pair in pairs if self.liquidity.get(pair, 0.0) <= 0]
-                for pair in missing_volume:
-                    self.skipped_reasons[pair] = "no matching positive ticker volume"
                 pairs = [pair for pair in pairs if self.liquidity.get(pair, 0.0) > 0]
                 pairs.sort(key=lambda pair: (
                     -self.liquidity.get(pair, 0.0),
-                    preferences.get(self._norm(pair), 10**9),
-                    pair,
+                    preferences.get(self._norm(pair), 10**9), pair,
                 ))
-                logger.info(f"{label}: ranked markets with positive 24h ticker volume")
+                logger.info(f"{label}: ranked Futures markets with positive 24h volume")
             else:
                 pairs.sort(key=lambda pair: (preferences.get(self._norm(pair), 10**9), pair))
-                logger.warning(f"{label}: no usable ticker volume; using configured preference order then symbol order")
-            return pairs
+                logger.warning(f"{label}: no Futures volume; using configured order then symbol order")
+            return pairs[:limit]
 
         self._ranked_normal = rank_universe(normal_rank, settings.normal_symbol_limit, "Normal")
         self._ranked_momentum = rank_universe(momentum_rank, settings.momentum_symbol_limit, "Momentum")
@@ -267,13 +283,16 @@ class SymbolManager:
         }
 
         def rank(preferences: Dict[str, int], label: str) -> List[str]:
+            if label == "Momentum":
+                available = {self._norm(pair): pair for pair in self.valid_pairs}
+                selected = [available[key] for key in preferences if key in available]
+                missing = [key for key in preferences if key not in available]
+                if missing:
+                    logger.warning(f"MOMENTUM_WHITELIST_UNAVAILABLE count={len(missing)} symbols={','.join(missing)}")
+                return selected[:settings.momentum_symbol_limit]
             pairs = [pair for pair in self.valid_pairs if self.liquidity.get(pair, 0.0) > 0]
-            pairs.sort(key=lambda pair: (
-                -self.liquidity.get(pair, 0.0),
-                preferences.get(self._norm(pair), 10**9),
-                pair,
-            ))
-            logger.info(f"{label}: refreshed 24h liquidity ranking ({len(pairs)} markets with volume)")
+            pairs.sort(key=lambda pair: (-self.liquidity.get(pair, 0.0), preferences.get(self._norm(pair), 10**9), pair))
+            logger.info(f"{label}: refreshed Futures liquidity ranking ({len(pairs)} markets with volume)")
             return pairs
 
         self._ranked_normal = rank(normal_preferences, "Normal")
