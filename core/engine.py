@@ -516,9 +516,11 @@ class SignalEngine:
                          if len(close) >= 4 and float(close[-4]) > 0 else 0.0)
             if orb_result.get("state") in ("ORB_BREAKOUT", "ORB_RETEST"):
                 direction = orb_result.get("direction")
-            elif short_roc > 0 and (macd_hist is None or macd_hist >= 0):
+            elif short_roc > 0:
+                # ROC can seed an early watch candidate; MACD remains a hard
+                # confirmation for Momentum trade alerts later in the pipeline.
                 direction = "LONG"
-            elif short_roc < 0 and (macd_hist is None or macd_hist <= 0):
+            elif short_roc < 0:
                 direction = "SHORT"
 
         if not direction:
@@ -711,7 +713,11 @@ class SignalEngine:
                     strategy=momentum_state,
                 )
                 return
-            result = self.momentum_scoring.score_momentum(indicators, direction)
+            result = (
+                self.momentum_scoring.score_orb(indicators, direction)
+                if momentum_state in ("ORB_BREAKOUT", "ORB_RETEST")
+                else self.momentum_scoring.score_momentum(indicators, direction)
+            )
             strategy = momentum_state
 
         # A Normal candidate has already passed all six mandatory gates.
