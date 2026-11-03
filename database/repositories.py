@@ -293,7 +293,8 @@ async def record_signal_outcome(signal: dict, latest_price: float, outcome: str 
                 row.latest_price = latest_price
                 row.mfe_pct = max(row.mfe_pct, move)
                 row.mae_pct = min(row.mae_pct, move)
-                row.outcome = outcome
+                if row.outcome == "ACTIVE" or outcome in ("STOP", "FAILED_BREAKOUT"):
+                    row.outcome = outcome
                 row.payload = json.dumps(signal, default=str)
                 row.updated_at = now
             await session.commit()
