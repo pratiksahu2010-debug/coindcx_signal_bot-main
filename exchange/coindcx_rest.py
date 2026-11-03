@@ -223,14 +223,13 @@ class CoinDCXRest:
         """Return a copy of stale candle-feed observations for universe quarantine."""
         return {pair: dict(timeframes) for pair, timeframes in self._stale_market_timeframes.items()}
 
-    def set_ws_prices(self, prices: Dict[str, Any], timestamp_ms: Optional[int] = None) -> None:
+    def set_ws_prices(self, prices: Dict[str, Any], timestamp_ms: Optional[int] = None) -> int:
         """Accept Futures LTP updates; nested market payloads use ls, never mark price."""
         now_ms = int(time.time() * 1000)
-        ts = int(timestamp_ms or now_ms)
-        if ts < 10**12:
-            ts *= 1000
-        if abs(now_ms - ts) > 10000:
-            return
+        accepted = 0
+        root_ts = self._timestamp_ms(timestamp_ms) if timestamp_ms is not None else now_ms
+        if root_ts is None or abs(now_ms - root_ts) > 10000:
+            return 0
         accepted = 0
         for market, raw in prices.items():
             try:
@@ -261,6 +260,7 @@ class CoinDCXRest:
         now_ms = int(time.time() * 1000)
         if cached and 0 <= now_ms - cached[1] <= 5000:
             return cached[0]
+        logger.debug(f"FUTURES_LTP_REST_FALLBACK pair={pair} reason=ws_cache_missing_or_stale")
         rows = await self.get_ticker()
         matched = 0
         stale = 0
