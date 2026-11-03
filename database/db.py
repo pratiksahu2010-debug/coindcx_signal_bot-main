@@ -11,6 +11,16 @@ class Base(DeclarativeBase):
     pass
 
 
+async def _upgrade_postgres_schema(conn) -> None:
+    """Apply idempotent PostgreSQL type fixes not handled by create_all."""
+    if conn.dialect.name == "postgresql":
+        # Unix timestamps in milliseconds exceed PostgreSQL INTEGER's 32-bit range.
+        # ALTER is safe for existing rows and repeated startup/deploys.
+        await conn.execute(text(
+            "ALTER TABLE signal_dedup ALTER COLUMN candle_time_ms TYPE BIGINT"
+        ))
+
+
 engine = None
 SessionLocal = None
 
@@ -62,6 +72,7 @@ async def init_db() -> None:
         async with engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
             await conn.run_sync(Base.metadata.create_all)
+            await _upgrade_postgres_schema(conn)
             existing = await conn.run_sync(
                 lambda sync_conn: __import__("sqlalchemy").inspect(sync_conn).get_table_names()
             )
