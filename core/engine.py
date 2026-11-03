@@ -911,7 +911,13 @@ class SignalEngine:
                 try:
                     from database.repositories import save_pending_retest
                     if not await save_pending_retest(pending_key, pending_record):
-                        logger.error(f"PENDING_RETEST_PERSIST_FAILED {pending_key}")
+                        self.pending_retests.pop(pending_key, None)
+                        self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                        logger.error(
+                            f"PENDING_RETEST_PERSIST_FAILED_CLOSED {pending_key}; "
+                            "candidate discarded because restart-safe state was not committed"
+                        )
+                        return
                 except Exception as exc:
                     logger.error(f"PENDING_RETEST_PERSIST_ERROR {pending_key}: {exc}")
                 self._last_processed.setdefault(engine, {})[pair] = candle_ts
@@ -952,6 +958,10 @@ class SignalEngine:
                     self.signals[engine].invalidate(pair, engine, direction)
                     logger.warning(f"Signal suppressed: persistent duplicate/claim unavailable for {pair} {engine} {direction}")
                     return
+                logger.info(
+                    f"SIGNAL_CLAIMED pair={pair} engine={engine} direction={direction} "
+                    f"candle_open_ms={candle_ts}"
+                )
                 # Recheck price and age after the durable DB claim, immediately
                 # before Telegram delivery; a slow DB write must not stale the entry.
                 if self.telegram:
@@ -967,6 +977,15 @@ class SignalEngine:
                         or delivery_age < 0
                         or delivery_age > settings.max_signal_age_seconds
                     ):
+                        try:
+                            from database.repositories import release_signal_claim
+                            released = await release_signal_claim(signal, candle_ts)
+                            logger.info(
+                                f"SIGNAL_CLAIM_RELEASE_AFTER_VALIDATION_SKIP pair={pair} "
+                                f"released={released}"
+                            )
+                        except Exception as exc:
+                            logger.error(f"SIGNAL_CLAIM_RELEASE_FAILED {pair}: {exc}")
                         self.signals[engine].invalidate(pair, engine, direction)
                         logger.info(
                             f"DELIVERY_STALE_SKIP {pair} engine={engine} price={delivery_price} "
@@ -981,6 +1000,10 @@ class SignalEngine:
                 # A transient Telegram outage must not suppress this market for 30 minutes.
                 delivered = False
                 if self.telegram:
+                    logger.info(
+                        f"TELEGRAM_DELIVERY_ATTEMPT pair={pair} engine={engine} "
+                        f"direction={direction} candle_open_ms={candle_ts}"
+                    )
                     try:
                         delivered = bool(await self.telegram.send_signal(signal))
                     except Exception as e:
@@ -1001,6 +1024,11 @@ class SignalEngine:
                             from database.repositories import save_signal, record_signal_outcome
                             if not await save_signal(persisted_signal):
                                 logger.error(f"ACTIVE_SIGNAL_PERSIST_FAILED {pair} engine={engine}")
+                            else:
+                                logger.info(
+                                    f"ACTIVE_SIGNAL_PERSISTED pair={pair} engine={engine} "
+                                    f"direction={direction} candle_open_ms={candle_ts}"
+                                )
                             from database.repositories import record_signal_outcome
                             await record_signal_outcome(persisted_signal, float(delivery_price), "ACTIVE")
                         except Exception as exc:
@@ -1098,7 +1126,10 @@ class SignalEngine:
                     self.cooldowns[engine].set(pair, engine, direction)
                     from database.repositories import save_signal, record_signal_outcome
                     active = self.signals[engine].get(pair, engine, direction) or signal
-                    await save_signal(active)
+                    if not await save_signal(active):
+                        logger.error(f"RETEST_ACTIVE_SIGNAL_PERSIST_FAILED {key}")
+                    else:
+                        logger.info(f"RETEST_ACTIVE_SIGNAL_PERSISTED {key}")
                     await record_signal_outcome(signal, float(delivery_price), "ACTIVE")
                 logger.info(f"RETEST_SIGNAL_DELIVERED {key} price={delivery_price}")
             else:
