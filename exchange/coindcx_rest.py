@@ -71,28 +71,51 @@ class CoinDCXRest:
         )
         normalized = []
         for row in rows:
-            if not isinstance(row, dict):
+            # CoinDCX's documented active_instruments response is a JSON list
+            # of instrument-name strings (for example, "B-BTC_USDT"), not
+            # instrument metadata objects. Accept both the documented shape
+            # and object/wrapped variants for forward compatibility.
+            if isinstance(row, str):
+                raw_pair = row.strip().upper()
+                metadata = {}
+            elif isinstance(row, dict):
+                raw_pair = str(
+                    row.get("pair") or row.get("symbol") or row.get("instrument") or ""
+                ).strip().upper()
+                metadata = row
+            else:
                 continue
-            pair = str(row.get("pair") or row.get("symbol") or row.get("instrument") or "").upper()
-            if not pair:
+            if not raw_pair:
                 continue
+            pair = raw_pair
             if not pair.startswith(("B-", "I-", "HB-", "KC-")):
                 pair = "B-" + pair.replace("/", "_")
             if not pair.endswith("_USDT"):
                 continue
-            quote = str(row.get("margin_currency_short_name") or row.get("quote_currency_short_name") or "USDT").upper()
+            quote = str(
+                metadata.get("margin_currency_short_name")
+                or metadata.get("quote_currency_short_name")
+                or "USDT"
+            ).upper()
             if quote != "USDT":
                 continue
-            target = str(row.get("target_currency_short_name") or "").upper()
+            target = str(metadata.get("target_currency_short_name") or "").upper()
             if not target:
                 target = pair.split("-", 1)[-1].split("_", 1)[0]
             normalized.append({
-                **row, "pair": pair, "coindcx_name": pair,
+                **metadata,
+                "pair": pair,
+                "coindcx_name": pair,
                 "base_currency_short_name": "USDT",
                 "target_currency_short_name": target,
-                "status": row.get("status", "active"),
+                "status": metadata.get("status", "active"),
             })
-        return normalized
+        # The endpoint should not return duplicates, but deduplicate defensively
+        # while preserving exchange ordering.
+        unique = {}
+        for item in normalized:
+            unique.setdefault(item["pair"], item)
+        return list(unique.values())
 
     async def get_ticker(self) -> List[Dict]:
         """Futures current-price snapshot. No Spot ticker fallback is permitted."""
