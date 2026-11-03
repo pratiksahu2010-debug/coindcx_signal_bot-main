@@ -779,6 +779,7 @@ def test_normal_engine_has_no_macd_gate():
 
 
 def test_normal_scoring_has_no_macd_component_and_keeps_ten_point_scale():
+    import pytest
     from core.scoring_engine import ScoringEngine
 
     indicators = {
