@@ -165,3 +165,83 @@ def test_futures_ws_price_handler_accepts_documented_event_payload(monkeypatch):
         "prices": {"B-BTC_USDT": {"ls": "65000", "mp": "65100", "ts": now_ms}}
     }})
     assert rest._ws_prices["BTCUSDT"][0] == 65000.0
+
+
+
+@pytest.mark.parametrize("row_ts,expected_source", [
+    (1_800_000_000_000, "row"),
+    (1_800_000_000, "row"),
+])
+@pytest.mark.asyncio
+async def test_futures_ticker_row_timestamp_is_normalized_and_used(monkeypatch, row_ts, expected_source):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return {
+            "ts": now_ms - 60_000,
+            "prices": {"B-BTC_USDT": {"ls": "65000", "ts": row_ts}},
+        }
+
+    client._get = fake_get
+    rows = await client.get_ticker()
+    assert rows[0]["timestamp_source"] == expected_source
+    assert await client.get_last_price("B-BTC_USDT") == 65000.0
+
+
+@pytest.mark.parametrize("root_ts", [1_800_000_000_000, 1_800_000_000])
+@pytest.mark.asyncio
+async def test_futures_ticker_uses_root_timestamp_when_row_timestamp_absent(monkeypatch, root_ts):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return {"ts": root_ts, "prices": {"B-ETH_USDT": {"ls": "3000"}}}
+
+    client._get = fake_get
+    rows = await client.get_ticker()
+    assert rows[0]["timestamp_source"] == "root"
+    assert await client.get_last_price("B-ETH_USDT") == 3000.0
+
+
+@pytest.mark.asyncio
+async def test_futures_ticker_rejects_stale_row_even_when_root_timestamp_is_fresh(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return {
+            "ts": now_ms,
+            "prices": {"B-ETH_USDT": {"ls": "3000", "ts": now_ms - 30_000}},
+        }
+
+    client._get = fake_get
+    rows = await client.get_ticker()
+    assert await client.get_last_price("B-ETH_USDT") is None
+    assert rows[0]["timestamp_source"] == "row"
+
+
+@pytest.mark.asyncio
+async def test_futures_ticker_snapshot_and_symbol_lookup_share_freshness_rules(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return {
+            "ts": now_ms,
+            "prices": {
+                "B-BTC_USDT": {"ls": "65000"},
+                "B-ETH_USDT": {"ls": "3000", "ts": now_ms - 30_000},
+            },
+        }
+
+    client._get = fake_get
+    rows = await client.get_ticker()
+    ages = [client._ticker_age_seconds(row["timestamp"], now_ms) for row in rows]
+    assert sum(age is not None and -5 <= age <= 10 for age in ages) == 1
+    assert await client.get_last_price("B-BTC_USDT") == 65000.0
+    assert await client.get_last_price("B-ETH_USDT") is None

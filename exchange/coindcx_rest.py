@@ -21,6 +21,7 @@ class CoinDCXRest:
         self._ticker_snapshot_at = 0.0
         self._ticker_lock = asyncio.Lock()
         self._ws_prices: Dict[str, tuple] = {}
+        self._ws_last_update_ms: Optional[int] = None
         # pair -> timeframe -> consecutive stale API observations
         self._stale_market_timeframes: Dict[str, Dict[str, int]] = {}
         self.request_count = 0
@@ -118,14 +119,36 @@ class CoinDCXRest:
         return list(unique.values())
 
     @staticmethod
+    def _timestamp_ms(value: Any) -> Optional[int]:
+        """Normalize Unix seconds or milliseconds without accepting invalid epochs."""
+        try:
+            stamp = float(value)
+            if not __import__("math").isfinite(stamp) or stamp <= 0:
+                return None
+            # Current Unix seconds are ~1e9; milliseconds are ~1e12.
+            stamp_ms = int(stamp * 1000) if stamp < 10**11 else int(stamp)
+            # Reject implausible epochs instead of silently making stale data fresh.
+            if stamp_ms < 946684800000 or stamp_ms > 4102444800000:
+                return None
+            return stamp_ms
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @classmethod
+    def _ticker_age_seconds(cls, timestamp: Any, now_ms: int) -> Optional[float]:
+        stamp_ms = cls._timestamp_ms(timestamp)
+        return (now_ms - stamp_ms) / 1000.0 if stamp_ms is not None else None
+
+    @staticmethod
     def _normalize_ticker_row(market: Any, quote: Any, fallback_ts: Any = None) -> Optional[Dict]:
-        """Normalize documented Futures RT rows and list-shaped compatibility payloads."""
+        """Normalize Futures ticker rows and retain the timestamp's provenance."""
         if not isinstance(quote, dict):
             return None
         market_name = market or quote.get("market") or quote.get("pair") or quote.get("symbol") or quote.get("mkt")
         if not market_name:
             return None
-        timestamp = quote.get("ts") or quote.get("timestamp") or fallback_ts
+        row_ts = quote.get("ts") or quote.get("timestamp")
+        timestamp = row_ts if row_ts is not None else fallback_ts
         return {
             "market": str(market_name),
             "pair": quote.get("pair") or market_name,
@@ -133,8 +156,7 @@ class CoinDCXRest:
             "last_price": quote.get("ls") or quote.get("last_price") or quote.get("lastPrice"),
             "mark_price": quote.get("mp") or quote.get("mark_price"),
             "timestamp": timestamp,
-            # CoinDCX documents v as 24h Futures volume. Keep it as base volume;
-            # SymbolManager converts it to quote turnover using LTP when qv is absent.
+            "timestamp_source": "row" if row_ts is not None else ("root" if fallback_ts is not None else "missing"),
             "quote_volume": quote.get("qv") or quote.get("quote_volume") or quote.get("quoteVolume") or 0,
             "base_volume": quote.get("v") or quote.get("bv") or quote.get("base_volume") or quote.get("volume") or 0,
         }
@@ -165,24 +187,26 @@ class CoinDCXRest:
 
             now_ms = int(time.time() * 1000)
             valid_ltp = 0
-            ages = []
+            fresh_ages = []
+            stale_rows = 0
             for row in rows:
                 try:
                     price = float(row.get("last_price") or 0)
-                    ts = int(float(row.get("timestamp") or 0))
-                    if ts < 10**12:
-                        ts *= 1000
-                    if price > 0 and __import__("math").isfinite(price) and ts > 0:
+                    age = self._ticker_age_seconds(row.get("timestamp"), now_ms)
+                    if price > 0 and __import__("math").isfinite(price):
                         valid_ltp += 1
-                        ages.append((now_ms - ts) / 1000.0)
+                        if age is not None and -5 <= age <= 10:
+                            fresh_ages.append(age)
+                        else:
+                            stale_rows += 1
                 except (TypeError, ValueError, OverflowError):
-                    continue
-            fresh = [age for age in ages if -5 <= age <= 10]
+                    stale_rows += 1
             logger.info(
                 f"FUTURES_TICKER_SNAPSHOT rows={len(rows)} valid_ltp={valid_ltp} "
-                f"fresh_ltp={len(fresh)} oldest_age_s={max(fresh):.2f}"
-                if fresh else
-                f"FUTURES_TICKER_SNAPSHOT rows={len(rows)} valid_ltp={valid_ltp} fresh_ltp=0"
+                f"fresh_ltp={len(fresh_ages)} stale_ltp={stale_rows} "
+                f"oldest_fresh_age_s={max(fresh_ages):.2f}"
+                if fresh_ages else
+                f"FUTURES_TICKER_SNAPSHOT rows={len(rows)} valid_ltp={valid_ltp} fresh_ltp=0 stale_ltp={stale_rows}"
             )
             self._ticker_snapshot = rows
             self._ticker_snapshot_at = time.monotonic()
@@ -199,29 +223,35 @@ class CoinDCXRest:
         """Return a copy of stale candle-feed observations for universe quarantine."""
         return {pair: dict(timeframes) for pair, timeframes in self._stale_market_timeframes.items()}
 
-    def set_ws_prices(self, prices: Dict[str, Any], timestamp_ms: Optional[int] = None) -> None:
+    def set_ws_prices(self, prices: Dict[str, Any], timestamp_ms: Optional[int] = None) -> int:
         """Accept Futures LTP updates; nested market payloads use ls, never mark price."""
         now_ms = int(time.time() * 1000)
-        ts = int(timestamp_ms or now_ms)
-        if ts < 10**12:
-            ts *= 1000
-        if abs(now_ms - ts) > 10000:
-            return
+        accepted = 0
+        root_ts = self._timestamp_ms(timestamp_ms) if timestamp_ms is not None else now_ms
+        if root_ts is None or abs(now_ms - root_ts) > 10000:
+            return 0
+        accepted = 0
         for market, raw in prices.items():
             try:
                 if isinstance(raw, dict):
                     value = raw.get("ls") or raw.get("last_price") or raw.get("lastPrice")
-                    event_ts = raw.get("ts") or raw.get("timestamp") or ts
-                    event_ts = int(float(event_ts))
-                    if event_ts < 10**12:
-                        event_ts *= 1000
+                    raw_event_ts = raw.get("ts") or raw.get("timestamp") or timestamp_ms
                 else:
-                    value, event_ts = raw, ts
+                    value, raw_event_ts = raw, timestamp_ms
+                event_ts = self._timestamp_ms(raw_event_ts)
                 price = float(value)
-                if price > 0 and __import__("math").isfinite(price) and 0 <= now_ms - event_ts <= 5000:
+                if (
+                    event_ts is not None and price > 0
+                    and __import__("math").isfinite(price)
+                    and 0 <= now_ms - event_ts <= 5000
+                ):
                     self._ws_prices[self._market_key(market)] = (price, event_ts)
+                    accepted += 1
             except (TypeError, ValueError, OverflowError):
                 continue
+        if accepted:
+            self._ws_last_update_ms = now_ms
+        return accepted
 
     async def get_last_price(self, pair: str) -> Optional[float]:
         """Return fresh Futures LTP only. Missing/stale Futures data fails closed."""
@@ -230,6 +260,7 @@ class CoinDCXRest:
         now_ms = int(time.time() * 1000)
         if cached and 0 <= now_ms - cached[1] <= 5000:
             return cached[0]
+        logger.debug(f"FUTURES_LTP_REST_FALLBACK pair={pair} reason=ws_cache_missing_or_stale")
         rows = await self.get_ticker()
         matched = 0
         stale = 0
@@ -241,17 +272,20 @@ class CoinDCXRest:
                 continue
             matched += 1
             try:
-                ts = int(float(row.get("timestamp") or 0))
-                if ts < 10**12:
-                    ts *= 1000
-                age = (now_ms - ts) / 1000.0
-                if ts <= 0 or age < -5 or age > 10:
+                age = self._ticker_age_seconds(row.get("timestamp"), now_ms)
+                if age is None or age < -5 or age > 10:
                     stale += 1
+                    logger.warning(
+                        f"FUTURES_LTP_ROW_REJECTED pair={pair} matched_market={row.get('market')} "
+                        f"timestamp_source={row.get('timestamp_source', 'unknown')} "
+                        f"timestamp={row.get('timestamp')} age_seconds={age}"
+                    )
                     continue
                 price = float(row.get("last_price") or 0)
                 if price > 0 and __import__("math").isfinite(price):
                     return price
             except (TypeError, ValueError, OverflowError):
+                stale += 1
                 continue
         logger.warning(
             f"FUTURES_LTP_UNAVAILABLE pair={pair} ticker_rows={len(rows)} "
