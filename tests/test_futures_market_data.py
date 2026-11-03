@@ -286,3 +286,40 @@ def test_futures_ws_accepts_bounded_future_timestamp_skew(monkeypatch):
         now_ms + 6_000,
     )
     assert accepted == 1
+
+
+@pytest.mark.asyncio
+async def test_futures_ws_start_uses_compatible_connect_signature(monkeypatch):
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    class CandleStub:
+        def on_candle(self, *args, **kwargs):
+            pass
+
+    class SocketStub:
+        def __init__(self):
+            self.connected = False
+            self.emitted = []
+
+        async def connect(self, url, transports=None):
+            self.connected = True
+            self.connect_args = {"url": url, "transports": transports}
+
+        async def emit(self, event, payload):
+            self.emitted.append((event, payload))
+
+        async def disconnect(self):
+            self.connected = False
+
+    monkeypatch.setattr("exchange.coindcx_ws.settings.enable_websocket", True)
+    stream = CoinDCXFuturesStream(CandleStub(), CoinDCXRest())
+    socket = SocketStub()
+    stream.client = socket
+
+    started = await stream.start(["B-BTC_USDT"])
+
+    assert started is True
+    assert socket.connect_args["transports"] == ["websocket"]
+    assert ("join", {"channelName": "currentPrices@futures@rt"}) in socket.emitted
+    assert any(payload.get("channelName") == "B-BTC_USDT_5m-futures"
+               for event, payload in socket.emitted if event == "join")

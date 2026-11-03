@@ -142,7 +142,6 @@ class CoinDCXFuturesStream:
             await self.client.connect(
                 settings.coindcx_ws_url,
                 transports=["websocket"],
-                wait_timeout=12,
             )
             # A single public futures price channel provides live LTP for the universe.
             await self.client.emit("join", {"channelName": "currentPrices@futures@rt"})
