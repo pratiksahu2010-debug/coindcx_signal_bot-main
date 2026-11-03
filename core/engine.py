@@ -137,6 +137,7 @@ class SignalEngine:
         self.pending_retest_checks = 0
         self.pending_retest_failures = 0
         self.telegram_delivery_failures = 0
+        self._pending_retest_cursor = 0
 
     def set_telegram(self, tg) -> None:
         self.telegram = tg
@@ -231,7 +232,13 @@ class SignalEngine:
         """Rate-limited fresh-LTP monitor; bounded to five checks per interval."""
         while self._running:
             try:
-                keys = list(self.pending_retests)[:5]
+                all_keys = list(self.pending_retests)
+                if all_keys:
+                    start = self._pending_retest_cursor % len(all_keys)
+                    keys = (all_keys[start:] + all_keys[:start])[:5]
+                    self._pending_retest_cursor = (start + len(keys)) % max(1, len(all_keys))
+                else:
+                    keys = []
                 for key in keys:
                     pending = self.pending_retests.get(key)
                     if not pending:
