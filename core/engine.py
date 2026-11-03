@@ -379,7 +379,7 @@ class SignalEngine:
         confirm_long = confirm_short = False
         confirm_candle_time_ms = None
         conf_data = await self.rest.get_candles(pair, settings.candle_confirm_tf, limit=CONFIRM_CANDLE_HISTORY)
-        if conf_data and len(conf_data) >= 55:
+        if conf_data and len(conf_data) >= 21:
             self.candles.seed(pair, settings.candle_confirm_tf, conf_data)
             c_arr = self.candles.get_arrays(pair, settings.candle_confirm_tf)
             c_close = np.asarray(c_arr.get("close", []), dtype=float)
@@ -452,10 +452,21 @@ class SignalEngine:
         # Determine direction from EMA9/EMA21 only. VWAP is evaluated as its
         # own mandatory gate below; candle direction/body is not a gate.
         direction = None
-        if ema9 is not None and ema21 is not None:
-            if ema9 > ema21:
+        if engine == "normal":
+            if ema9 is not None and ema21 is not None:
+                if ema9 > ema21:
+                    direction = "LONG"
+                elif ema9 < ema21:
+                    direction = "SHORT"
+        else:
+            # Momentum may lead the EMA crossover: use short ROC + MACD sign
+            # as an independent early directional candidate. EMA alignment is
+            # retained as quality evidence, never the initial direction gate.
+            short_roc = ((float(close[-1]) / float(close[-4]) - 1.0) * 100.0
+                         if len(close) >= 4 and float(close[-4]) > 0 else 0.0)
+            if macd_hist is not None and macd_hist > 0 and short_roc > 0:
                 direction = "LONG"
-            elif ema9 < ema21:
+            elif macd_hist is not None and macd_hist < 0 and short_roc < 0:
                 direction = "SHORT"
 
         if not direction:
@@ -521,7 +532,7 @@ class SignalEngine:
             result = self.normal_scoring.score_normal(indicators, direction)
         else:
             # Momentum engine uses its own configured minimum trend-strength gate.
-            if adx_v is None or adx_v < settings.momentum_adx_explosion:
+            if adx_v is None or adx_v < max(12.0, settings.momentum_adx_explosion * 0.70):
                 self._log_candle_evaluation(
                     pair, engine, direction, candle_ts, candle_close_ms,
                     confirm_candle_time_ms, indicators, "REJECT",
@@ -543,11 +554,22 @@ class SignalEngine:
                 if prev_bb is not None and prev_kc is not None:
                     p_upper,p_mid,p_lower=prev_bb
                     p_kupper,_,p_klower=prev_kc
-                    was_squeezed = p_upper < p_kupper and p_lower > p_klower
+                    # Compression is a rolling state, not a one-candle event.
+                    recent_compression = False
+                    for back in range(1, min(7, len(close) - 20)):
+                        hist_bb = bollinger_bands(close[:-back], 20, 2.0)
+                        hist_kc = keltner_channels(high[:-back], low[:-back], close[:-back], 20, 1.5)
+                        if hist_bb is None or hist_kc is None:
+                            continue
+                        hu, _, hl = hist_bb
+                        hku, _, hkl = hist_kc
+                        if hu < hku and hl > hkl:
+                            recent_compression = True
+                            break
                     now_released = upper_bb > upper_kc or lower_bb < lower_kc
-                    squeeze_release = was_squeezed and now_released
+                    squeeze_release = recent_compression and now_released
                     bw_prev = bandwidth(p_upper,p_lower,p_mid)
-                    bw_expand = bw_now is not None and bw_prev is not None and bw_now > bw_prev * 1.08
+                    bw_expand = bw_now is not None and bw_prev is not None and bw_now > bw_prev * 1.03
             atr_series = [atr(high[:i+1],low[:i+1],close[:i+1],14) for i in range(max(14,len(close)-8),len(close))]
             valid_atr = [x for x in atr_series if x is not None]
             atr_expansion = (valid_atr[-1]/np.mean(valid_atr[:-1])) if len(valid_atr)>=3 and np.mean(valid_atr[:-1])>0 else 1.0
@@ -583,10 +605,9 @@ class SignalEngine:
             valid_momentum_state = momentum_state in ("EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION")
             momentum_gates = {
                 "momentum_state": valid_momentum_state,
-                "confirm_15m": bool(indicators["confirm_15m"]),
                 "macd_direction": bool(indicators["macd_direction_ok"]),
-                "di_direction": bool(indicators["di_direction_ok"]),
-                "directional_candle": bool(indicators["directional_candle"]),
+                # A 15m close, DI cross and large candle body can lag the move.
+                # Keep higher-timeframe context and candle shape as diagnostics.
                 "not_chasing_or_structure_break": bool(indicators["not_chasing"] or indicators["structure_break"]),
             }
             failed = [name for name, passed in momentum_gates.items() if not passed]
