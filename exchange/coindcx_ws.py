@@ -28,7 +28,11 @@ class CoinDCXFuturesStream:
         self._running = False
         self._connected = False
         self._last_event_ms: Optional[int] = None
+        self.on_candle_callback = None
         self._register_handlers()
+
+    def set_candle_callback(self, callback) -> None:
+        self.on_candle_callback = callback
 
     def _register_handlers(self) -> None:
         @self.client.event
@@ -91,6 +95,11 @@ class CoinDCXFuturesStream:
                     interval = next((x for x in ("5m", "15m") if x in channel), None)
                 if interval:
                     self.candles.on_candle(pair, interval, candle)
+                    if self.on_candle_callback is not None:
+                        try:
+                            self.on_candle_callback(pair, interval, candle)
+                        except Exception as exc:
+                            logger.debug(f"WS_CANDLE_CALLBACK_SKIPPED {pair}: {exc}")
                     self._last_event_ms = int(row.get("Ets") or row.get("close_time") or ts)
             except (TypeError, ValueError, OverflowError):
                 continue
