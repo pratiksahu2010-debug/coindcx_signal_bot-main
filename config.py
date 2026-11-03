@@ -49,6 +49,7 @@ if HAS_PYDANTIC:
         momentum_symbol_limit: int = Field(default=80, alias="MOMENTUM_SYMBOL_LIMIT")
         candle_close_grace_seconds: int = Field(default=3, alias="CANDLE_CLOSE_GRACE_SECONDS")
         max_signal_age_seconds: int = Field(default=120, alias="MAX_SIGNAL_AGE_SECONDS")
+        futures_round_trip_cost_bps: float = Field(default=15.0, alias="FUTURES_ROUND_TRIP_COST_BPS")
         rvol_min: float = 1.2
         atr_min_pct: float = 0.3
 
@@ -100,6 +101,7 @@ else:
             self.momentum_symbol_limit = int(os.getenv("MOMENTUM_SYMBOL_LIMIT", "80"))
             self.candle_close_grace_seconds = int(os.getenv("CANDLE_CLOSE_GRACE_SECONDS", "3"))
             self.max_signal_age_seconds = int(os.getenv("MAX_SIGNAL_AGE_SECONDS", "120"))
+            self.futures_round_trip_cost_bps = float(os.getenv("FUTURES_ROUND_TRIP_COST_BPS", "15.0"))
             self.rvol_min = 1.2
             self.atr_min_pct = 0.3
 
