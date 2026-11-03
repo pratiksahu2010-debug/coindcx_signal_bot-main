@@ -35,5 +35,7 @@ services:
         sync: false
       - key: TELEGRAM_ADMIN_IDS
         sync: false
+      # Set to the Internal Database URL of a managed PostgreSQL instance.
+      # Production startup fails closed until PostgreSQL is configured.
       - key: DATABASE_URL
-        value: "sqlite+aiosqlite:///./coindcx_signal_bot.db"
+        sync: false

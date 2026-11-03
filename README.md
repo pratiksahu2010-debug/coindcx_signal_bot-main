@@ -84,3 +84,16 @@ Backtest performance is not claimed by this release: live market data and a hist
 - Only aligned, fully closed candles are passed to strategies. The close-publication
   grace period defaults to 3 seconds and is configurable with
   `CANDLE_CLOSE_GRACE_SECONDS`.
+
+
+## Production database (Render)
+
+Production requires PostgreSQL. SQLite is supported only for local development because Render instance filesystems may be ephemeral.
+
+1. Create a managed PostgreSQL database in the same Render region as the web service.
+2. Copy its **Internal Database URL** into the web service environment variable `DATABASE_URL`.
+3. Keep the URL secret; do not commit it to this repository.
+4. Redeploy and verify startup logs report `Database initialized` and health state reports `database=postgres`.
+5. Confirm pending retests and signal deduplication survive a service restart before relying on persistent recovery.
+
+The Render blueprint deliberately leaves `DATABASE_URL` unsynced so it cannot silently fall back to an ephemeral SQLite file. PostgreSQL provisioning and any associated billing remain an explicit Render dashboard action.
