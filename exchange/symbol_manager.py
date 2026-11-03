@@ -19,6 +19,7 @@ class SymbolManager:
         self.metadata: Dict[str, dict] = {}
         self.liquidity: Dict[str, float] = {}
         self.skipped_reasons: Dict[str, str] = {}
+        self.whitelist_diagnostics: Dict[str, dict] = {}
         self._ranked_normal: List[str] = []
         self._ranked_momentum: List[str] = []
         self._quarantined: Dict[str, dict] = {}
@@ -189,6 +190,19 @@ class SymbolManager:
         normal_rank = {self._norm(s): i for i, s in enumerate(normal_preferences)}
         momentum_rank = {self._norm(s): i for i, s in enumerate(momentum_preferences)}
 
+        # Keep the raw active-instrument response beside the filtered universe
+        # so every static Momentum symbol gets an actionable reason when absent.
+        discovered_by_key = {}
+        for market in details:
+            if not isinstance(market, dict):
+                continue
+            aliases = (market.get("pair"), market.get("symbol"), market.get("coindcx_name"))
+            for alias in aliases:
+                key = self._norm(alias)
+                if key:
+                    discovered_by_key[key] = market
+        self.whitelist_diagnostics.clear()
+
         def rank_universe(preferences: Dict[str, int], limit: int, label: str) -> List[str]:
             # Momentum/ORB share an exact static configured whitelist. Do not
             # silently replace unavailable configured instruments with unrelated markets.
@@ -203,6 +217,30 @@ class SymbolManager:
                         selected.append(pair)
                     else:
                         missing.append(key)
+                        raw_market = discovered_by_key.get(key)
+                        if raw_market is None:
+                            status = "NOT_LISTED"
+                            reason = "not returned by active USDT Futures instruments endpoint"
+                        else:
+                            market_status = str(raw_market.get("status") or "active").lower()
+                            if market_status not in ("active", "trading", "enabled", "online", "1", ""):
+                                status = "INACTIVE"
+                                reason = f"exchange status={market_status}"
+                            elif self._is_stablecoin_pair(
+                                str(raw_market.get("pair") or raw_market.get("coindcx_name") or ""),
+                                str(raw_market.get("target_currency_short_name") or ""),
+                            ):
+                                status = "EXCLUDED"
+                                reason = "stablecoin-to-USDT pair excluded"
+                            else:
+                                status = "NOT_ELIGIBLE"
+                                reason = "returned by exchange but failed active USDT Futures normalization"
+                        self.whitelist_diagnostics[key] = {
+                            "configured_symbol": key, "status": status, "reason": reason,
+                        }
+                        logger.warning(
+                            f"MOMENTUM_WHITELIST_SYMBOL symbol={key} status={status} reason={reason}"
+                        )
                 if missing:
                     logger.warning(
                         f"MOMENTUM_WHITELIST_UNAVAILABLE count={len(missing)} "
