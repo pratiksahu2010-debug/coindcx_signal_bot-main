@@ -717,3 +717,16 @@ def test_scan_loop_waits_for_fresh_boundary_before_first_engine_scan(monkeypatch
     events = []
     asyncio.run(run())
     assert events == ["refresh", "boundary"]
+
+def test_watchlist_refresh_does_not_extend_original_setup_expiry():
+    from datetime import datetime, timezone, timedelta
+    from core.watchlist_manager import WatchlistManager
+
+    manager = WatchlistManager(ttl_minutes=60)
+    item = {"pair": "B-BTC_USDT", "engine": "momentum", "direction": "LONG", "score": 5.5}
+    manager.add(item)
+    key = manager._key(item["pair"], item["engine"], item["direction"])
+    original_expiry = manager._entries[key]["expires_at"]
+    manager.add({**item, "score": 6.0, "price": 101.0})
+    assert manager._entries[key]["expires_at"] == original_expiry
+    assert manager._entries[key]["score"] == 6.0
