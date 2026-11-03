@@ -374,7 +374,11 @@ def test_rest_client_rejects_future_open_candles(monkeypatch):
 def test_score_disposition_keeps_watchlist_below_signal_threshold():
     from core.engine import _score_disposition
 
-    assert _score_disposition(5.99, 7.0) == "REJECT"
+    # Momentum watchlist floor is 5.5; scores below the floor are rejected.
+    # Scores between the watchlist floor and signal threshold remain watchlist-only.
+    assert _score_disposition(5.49, 7.0) == "REJECT"
+    assert _score_disposition(5.5, 7.0) == "WATCHLIST"
+    assert _score_disposition(5.99, 7.0) == "WATCHLIST"
     assert _score_disposition(6.0, 7.0) == "WATCHLIST"
     assert _score_disposition(6.99, 7.0) == "WATCHLIST"
     assert _score_disposition(7.0, 7.0) == "SIGNAL"
@@ -703,16 +707,13 @@ def test_scan_loop_waits_for_fresh_boundary_before_first_engine_scan(monkeypatch
         engine._wait_for_next_primary_boundary = wait_for_boundary
         old_normal = settings.enable_normal_engine
         old_momentum = settings.enable_momentum_engine
-        old_signals = settings.enable_signals_engine
         settings.enable_normal_engine = False
         settings.enable_momentum_engine = False
-        settings.enable_signals_engine = False
         try:
             await engine.run_scan_loop(app=None)
         finally:
             settings.enable_normal_engine = old_normal
             settings.enable_momentum_engine = old_momentum
-            settings.enable_signals_engine = old_signals
 
     events = []
     asyncio.run(run())
