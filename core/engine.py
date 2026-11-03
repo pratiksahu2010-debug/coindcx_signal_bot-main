@@ -135,6 +135,46 @@ class SignalEngine:
     def set_telegram(self, tg) -> None:
         self.telegram = tg
 
+    def on_intrabar_candle(self, pair: str, timeframe: str, candle: Dict[str, Any]) -> None:
+        """Record early forming-candle momentum as watchlist context only.
+
+        Intrabar candidates are never Telegram signals. The normal closed-candle
+        REST scan must independently confirm the final Momentum setup.
+        """
+        if timeframe != settings.candle_primary_tf:
+            return
+        arr = self.candles.get_arrays(pair, timeframe)
+        if not arr or len(arr.get("close", [])) < 25:
+            return
+        try:
+            close = np.asarray(arr["close"], dtype=float)
+            volume = np.asarray(arr["volume"], dtype=float)
+            opens = float(candle["open"])
+            live_close = float(candle["close"])
+            avg_volume = float(np.mean(volume[-21:-1]))
+            if avg_volume <= 0 or live_close <= 0:
+                return
+            rvol_live = float(volume[-1]) / avg_volume
+            short_roc = (live_close / float(close[-4]) - 1.0) * 100.0
+            if rvol_live < 1.2 or abs(short_roc) < 0.08:
+                return
+            direction = "LONG" if live_close > opens and short_roc > 0 else (
+                "SHORT" if live_close < opens and short_roc < 0 else None
+            )
+            if direction is None:
+                return
+            self.watchlists["momentum"].add({
+                "pair": pair, "display": self.symbols.display_name(pair),
+                "direction": direction, "engine": "momentum",
+                "strategy": "INTRABAR_PRESETUP", "score": 5.5,
+                "grade": "WATCHLIST", "price": live_close,
+                "indicators": {"live_rvol": round(rvol_live, 3),
+                               "live_roc": round(short_roc, 4)},
+                "timestamp": utc_iso(utc_now()),
+            })
+        except (KeyError, TypeError, ValueError, ZeroDivisionError, FloatingPointError):
+            return
+
     async def restore_active_signals(self) -> int:
         """Rehydrate active signal lifecycle state from the configured database."""
         try:
