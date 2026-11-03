@@ -38,12 +38,12 @@ class CoinDCXFuturesStream:
         @self.client.event
         async def connect():
             self._connected = True
-            logger.info("COINDCX_WS_CONNECTED")
+            logger.info(f"COINDCX_WS_CONNECTED price_cache_pairs={len(self.rest._ws_prices) if self.rest else 0}")
 
         @self.client.event
         async def disconnect():
             self._connected = False
-            logger.warning("COINDCX_WS_DISCONNECTED")
+            logger.warning("COINDCX_WS_DISCONNECTED REST_fallback=true")
 
         @self.client.on("candlestick")
         async def on_candlestick(message):
@@ -62,19 +62,12 @@ class CoinDCXFuturesStream:
             prices = payload.get("prices") or payload.get("data")
             event_ts = payload.get("ts") or payload.get("timestamp")
             if isinstance(prices, dict):
-                before = len(self.rest._ws_prices)
-                self.rest.set_ws_prices(prices, event_ts)
-                accepted = len(self.rest._ws_prices) - before
-                # Existing pairs can be updated without changing cache size.
-                if not accepted:
-                    accepted = sum(
-                        1 for market, quote in prices.items()
-                        if isinstance(quote, dict)
-                        and (quote.get("ls") or quote.get("last_price") or quote.get("lastPrice"))
-                    )
-                logger.debug(
+                accepted = self.rest.set_ws_prices(prices, event_ts)
+                self._last_event_ms = int(__import__("time").time() * 1000) if accepted else self._last_event_ms
+                logger.info(
                     f"COINDCX_WS_PRICE_EVENT markets={len(prices)} "
-                    f"ltp_updates={accepted} event_ts={'present' if event_ts else 'missing'}"
+                    f"accepted_ltp_updates={accepted} cache_pairs={len(self.rest._ws_prices)} "
+                    f"event_ts={'present' if event_ts else 'missing'}"
                 )
                 return
             if isinstance(prices, list):
@@ -92,10 +85,11 @@ class CoinDCXFuturesStream:
             if market:
                 normalized[str(market)] = row
         if normalized:
-            self.rest.set_ws_prices(normalized, event_ts)
-            logger.debug(
+            accepted = self.rest.set_ws_prices(normalized, event_ts)
+            self._last_event_ms = int(__import__("time").time() * 1000) if accepted else self._last_event_ms
+            logger.info(
                 f"COINDCX_WS_PRICE_EVENT markets={len(normalized)} "
-                f"ltp_updates={sum(bool(v.get('ls') or v.get('last_price') or v.get('lastPrice')) for v in normalized.values())}"
+                f"accepted_ltp_updates={accepted} cache_pairs={len(self.rest._ws_prices)}"
             )
 
     def _handle_candlestick(self, message: Any) -> None:
@@ -141,6 +135,7 @@ class CoinDCXFuturesStream:
 
     async def start(self, pairs: Iterable[str]) -> bool:
         if not settings.enable_websocket:
+            logger.info("COINDCX_WS_DISABLED ENABLE_WEBSOCKET=false REST_fallback=true")
             return False
         self._running = True
         try:
@@ -158,7 +153,7 @@ class CoinDCXFuturesStream:
                     channel = f"{pair}_{interval}-futures"
                     await self.client.emit("join", {"channelName": channel})
                     self._channels.add(channel)
-            logger.info(f"COINDCX_WS_SUBSCRIBED channels={len(self._channels)} price_channel=currentPrices@futures@rt")
+            logger.info(f"COINDCX_WS_SUBSCRIBE_SENT channels={len(self._channels)} price_channel=currentPrices@futures@rt ack_protocol=not_confirmed")
             return True
         except Exception as exc:
             logger.warning(f"COINDCX_WS_START_FAILED REST_fallback=true error={exc}")
@@ -180,3 +175,9 @@ class CoinDCXFuturesStream:
     @property
     def status(self) -> str:
         return "connected" if self._connected else ("reconnecting" if self._running else "stopped")
+
+    @property
+    def price_feed_age_seconds(self) -> Optional[float]:
+        if self.rest is None or self.rest._ws_last_update_ms is None:
+            return None
+        return max(0.0, (__import__("time").time() * 1000 - self.rest._ws_last_update_ms) / 1000.0)
