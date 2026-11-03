@@ -323,10 +323,19 @@ async def signal_performance_report(days: int = 30) -> dict:
         groups[f"{row.engine}:{row.strategy}"].append(row)
     report = {}
     for name, items in groups.items():
+        ages = []
+        for item in items:
+            try:
+                ages.append(float((__import__("json").loads(item.payload or "{}")).get("signal_age_seconds", 0)))
+            except (TypeError, ValueError):
+                pass
+        failed_breakouts = sum(x.outcome == "FAILED_BREAKOUT" for x in items)
         report[name] = {"count": len(items), "tp1_rate": sum(x.outcome == "TP1" for x in items) / len(items),
-            "stop_rate": sum(x.outcome == "STOP" for x in items) / len(items),
+            "stop_rate": sum(x.outcome in ("STOP", "FAILED_BREAKOUT") for x in items) / len(items),
+            "false_breakout_rate": failed_breakouts / len(items),
             "avg_mfe_pct": sum(x.mfe_pct for x in items) / len(items),
             "avg_mae_pct": sum(x.mae_pct for x in items) / len(items),
+            "avg_signal_age_seconds": sum(ages) / len(ages) if ages else None,
             "active": sum(x.outcome == "ACTIVE" for x in items)}
     return {"available": True, "groups": report}
 
