@@ -22,7 +22,7 @@
    - `TELEGRAM_ADMIN_IDS` = your numeric Telegram user ID (from @userinfobot)
    - `APP_ENV=production`
    - `SIGNAL_THRESHOLD=7.0`
-   - `DATABASE_URL=sqlite+aiosqlite:///./coindcx_signal_bot.db` (already set by the included Render blueprint; no PostgreSQL setup)
+   - `DATABASE_URL` = the Internal Database URL from a managed Render PostgreSQL instance (keep it secret)
 7. Keep exactly **one Render service instance** and the configured **one Uvicorn worker**. Do not deploy a second copy with the same Telegram bot token.
 9. Deploy
 10. Open bot in Telegram → send `/start`
@@ -63,29 +63,6 @@ MIT (bot code). CoinDCX API subject to their terms.
 Backtest performance is not claimed by this release: live market data and a historical labeled dataset are required to validate win rate, expectancy, and false-positive reduction.
 
 
-## SQLite deployment (no PostgreSQL required)
-
-- The included Render blueprint sets `DATABASE_URL=sqlite+aiosqlite:///./coindcx_signal_bot.db`.
-  You do not need to create a PostgreSQL database or enter a database password.
-- Telegram command polling is enabled in SQLite mode. The Render service is configured
-  for one Uvicorn worker; keep exactly one running Render service instance using this
-  Telegram bot token. A second copy can cause Telegram's `Conflict: terminated by other
-  getUpdates request` error.
-- SQLite stores signal claims and bot state while the instance is running. **Render Free
-  filesystem storage is ephemeral**, so a restart, redeploy, or instance replacement can
-  erase this database. After that, recent signal-deduplication history may be lost and
-  an otherwise valid signal could be sent again.
-- The bot remains signal-only. No order execution is enabled.
-- PostgreSQL remains an optional future upgrade for durable shared state and advisory-lock
-  protection across multiple instances; it is not required for this single-instance setup.
-- Normal and Momentum engines select independent active USDT universes from live market
-  details and ticker liquidity. Defaults are 40 Normal symbols and 80 Momentum symbols;
-  the YAML files are tie-break preferences/fallbacks, not hard allowlists.
-- Only aligned, fully closed candles are passed to strategies. The close-publication
-  grace period defaults to 3 seconds and is configurable with
-  `CANDLE_CLOSE_GRACE_SECONDS`.
-
-
 ## Production database (Render)
 
 Production requires PostgreSQL. SQLite is supported only for local development because Render instance filesystems may be ephemeral.
@@ -93,7 +70,7 @@ Production requires PostgreSQL. SQLite is supported only for local development b
 1. Create a managed PostgreSQL database in the same Render region as the web service.
 2. Copy its **Internal Database URL** into the web service environment variable `DATABASE_URL`.
 3. Keep the URL secret; do not commit it to this repository.
-4. Redeploy and verify startup logs report `Database initialized` and health state reports `database=postgres`.
-5. Confirm pending retests and signal deduplication survive a service restart before relying on persistent recovery.
+4. Redeploy and verify logs show `DATABASE_READY dialect=postgresql connectivity=ok schema=ok` and health state reports `database=postgres`.
+5. Keep one Render instance and one Uvicorn worker initially. Confirm pending retests and signal deduplication survive a restart. CI exercises simultaneous duplicate claims and concurrent pending-retest upserts against PostgreSQL.
 
 The Render blueprint deliberately leaves `DATABASE_URL` unsynced so it cannot silently fall back to an ephemeral SQLite file. PostgreSQL provisioning and any associated billing remain an explicit Render dashboard action.
