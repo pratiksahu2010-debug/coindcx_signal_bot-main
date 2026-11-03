@@ -1170,7 +1170,8 @@ class SignalEngine:
                     try:
                         from database.repositories import update_signal_record, record_signal_outcome
                         await update_signal_record(sig, "closed_sl")
-                        await record_signal_outcome(sig, float(sl), "STOP")
+                        final_outcome = "FAILED_BREAKOUT" if str(sig.get("strategy", "")).startswith("ORB") else "STOP"
+                        await record_signal_outcome(sig, float(sl), final_outcome)
                     except Exception as exc:
                         logger.error(f"Persist SL outcome failed for {pair}: {exc}")
                 continue
@@ -1186,8 +1187,10 @@ class SignalEngine:
                 current = self.signals[engine].get(pair, engine, direction) or sig
                 status = current.get("status", "active")
                 try:
-                    from database.repositories import update_signal_record
+                    from database.repositories import update_signal_record, record_signal_outcome
                     await update_signal_record(current, status)
+                    if 1 in hits:
+                        await record_signal_outcome(current, float(t1), "TP1")
                 except Exception as exc:
                     logger.error(f"Persist TP outcome failed for {pair}: {exc}")
 
