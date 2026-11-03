@@ -56,6 +56,53 @@ def test_concurrent_claim_is_atomic():
     _run(run())
 
 
+
+def test_signal_dedup_millisecond_timestamp_column_is_upgraded_to_bigint():
+    from database import db as database_db
+    from database.db import Base, _upgrade_postgres_schema
+    from database.models import SignalDedupRecord
+    from database.repositories import claim_signal_once
+
+    async def run():
+        engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        previous = database_db.SessionLocal
+        database_db.SessionLocal = factory
+        pair = "TEST-" + uuid.uuid4().hex
+        timestamp_ms = 1793730600000
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+                # Recreate the production defect: an older deployed schema using int4.
+                await conn.execute(
+                    __import__("sqlalchemy").text(
+                        "ALTER TABLE signal_dedup ALTER COLUMN candle_time_ms TYPE INTEGER"
+                    )
+                )
+                await _upgrade_postgres_schema(conn)
+                column_type = await conn.scalar(
+                    __import__("sqlalchemy").text(
+                        "SELECT data_type FROM information_schema.columns "
+                        "WHERE table_name = 'signal_dedup' AND column_name = 'candle_time_ms'"
+                    )
+                )
+                assert column_type == "bigint"
+
+            signal = {"pair": pair, "engine": "normal", "direction": "LONG"}
+            assert await claim_signal_once(signal, timestamp_ms)
+            async with factory() as session:
+                row = await session.get(
+                    SignalDedupRecord, f"{pair}:LONG:{timestamp_ms}"
+                )
+                assert row is not None
+                assert row.candle_time_ms == timestamp_ms
+        finally:
+            database_db.SessionLocal = previous
+            await engine.dispose()
+
+    _run(run())
+
+
 def test_concurrent_pending_retest_upserts_preserve_one_row_per_key():
     from database import db as database_db
     from database.db import Base
