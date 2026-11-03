@@ -95,4 +95,5 @@ async def test_active_futures_instruments_accept_wrapped_and_metadata_shapes():
 
     client._get = fake_get
     markets = await client.get_market_details()
-    assert [row["pair"] for row in markets] == ["B-SOL_USDT"]
+    assert [row["pair"] for row in markets] == ["B-SOL_USDT", "B-XRP_USDT"]
+    assert markets[1]["status"] == "inactive"
