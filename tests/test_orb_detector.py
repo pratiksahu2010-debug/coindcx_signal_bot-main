@@ -54,11 +54,11 @@ def test_orb_session_expires_after_india_cash_session():
 
 def test_orb_detects_retest_after_initial_breakout():
     candles = base_candles((9, 30), 102.0, 100.8, 101.8)
-    candles["time"].append(ts(9, 35))
-    candles["open"].append(101.3)
-    candles["high"].append(102.0)
-    candles["low"].append(101.1)
-    candles["close"].append(101.7)
+    candles["time"] = np.append(candles["time"], ts(9, 35))
+    candles["open"] = np.append(candles["open"], 101.3)
+    candles["high"] = np.append(candles["high"], 102.0)
+    candles["low"] = np.append(candles["low"], 101.1)
+    candles["close"] = np.append(candles["close"], 101.7)
     result = evaluate(candles, 1.5, 1.8)
     assert result["state"] == "ORB_RETEST"
     assert result["direction"] == "LONG"
