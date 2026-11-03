@@ -16,7 +16,7 @@
 2. Render → New Web Service → connect repo
 3. **Build:** `pip install -r requirements.txt`
 4. **Start:** `uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1`
-5. Instance: **Free** · Health Check Path: `/health`
+5. Instance: **Free** · Health Check Path: `/ping`
 6. Environment variables:
    - `TELEGRAM_BOT_TOKEN` = from @BotFather
    - `TELEGRAM_ADMIN_IDS` = your numeric Telegram user ID (from @userinfobot)
@@ -27,6 +27,13 @@
 9. Deploy
 10. Open bot in Telegram → send `/start`
 11. Cron-job.org → GET `https://YOUR-SERVICE.onrender.com/ping` every 10–14 min
+
+## Keep-alive and health checks
+
+- `GET /ping` and `HEAD /ping` return HTTP `204 No Content`: no response body, JSON, database query, exchange request, Telegram call, or scan work.
+- Render uses `/ping` as its process-liveness check so a temporary PostgreSQL outage does not mark the web process dead.
+- Use `/health` for database/engine readiness diagnostics; it can return `503` while scanning is deliberately paused.
+- An external cron should request `/ping` every 10–14 minutes. This is best-effort on Render Free and does not override Render suspension policies or guarantee uninterrupted operation.
 
 ## Local run
 ```bash
