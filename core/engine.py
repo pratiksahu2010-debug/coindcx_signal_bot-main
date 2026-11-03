@@ -45,7 +45,7 @@ def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min:
     is_long = direction == "LONG"
     ema9, ema21 = indicators.get("ema9"), indicators.get("ema21")
     price, vwap_value = indicators.get("close"), indicators.get("vwap")
-    macd_hist, rsi_value = indicators.get("macd_hist"), indicators.get("rsi")
+    rsi_value = indicators.get("rsi")
     adx_value = indicators.get("adx")
     return {
         "ema_alignment": (
@@ -58,10 +58,6 @@ def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min:
         ),
         "adx_min": adx_value is not None and adx_value >= adx_min,
         "context_15m": bool(indicators.get("confirm_15m")),
-        "macd_direction": (
-            macd_hist is not None
-            and ((macd_hist > 0) if is_long else (macd_hist < 0))
-        ),
         "rsi_direction": (
             rsi_value is not None
             and ((rsi_value > 50.0) if is_long else (rsi_value < 50.0))
@@ -439,7 +435,8 @@ class SignalEngine:
         adx_v = adx_res[0] if adx_res is not None else None
         plus_di = adx_res[1] if adx_res is not None else None
         minus_di = adx_res[2] if adx_res is not None else None
-        macd_res = macd(close)
+        # MACD is calculated only for Momentum; Normal decisions do not depend on it.
+        macd_res = macd(close) if engine == "momentum" else None
         macd_hist = macd_res[2] if macd_res is not None else None
         # UTC-session anchored VWAP; avoids an arbitrary rolling 100-bar reset.
         day_start = (int(arr["time"][-1]) // 86_400_000) * 86_400_000
@@ -623,7 +620,7 @@ class SignalEngine:
             (direction == "SHORT" and close_location <= 0.35 and signed_body < 0))
 
         if engine == "normal":
-            # Exactly six mandatory Normal Engine conditions. Strategy labels,
+            # Exactly five mandatory Normal Engine conditions. MACD and strategy labels,
             # candle shape, DI, ADX slope, EMA50 and extra 15m filters are not gates.
             strategy = detect_strategy(indicators, direction)
             if strategy == "UNCLASSIFIED":
