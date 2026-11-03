@@ -991,16 +991,24 @@ class SignalEngine:
                     persisted_signal = self.signals[engine].get(pair, engine, direction)
                     if persisted_signal:
                         try:
-                            from database.repositories import save_signal
+                            from database.repositories import save_signal, record_signal_outcome
                             if not await save_signal(persisted_signal):
                                 logger.error(f"ACTIVE_SIGNAL_PERSIST_FAILED {pair} engine={engine}")
+                            from database.repositories import record_signal_outcome
+                            await record_signal_outcome(persisted_signal, float(delivery_price), "ACTIVE")
                         except Exception as exc:
                             logger.error(f"ACTIVE_SIGNAL_PERSIST_ERROR {pair}: {exc}")
                 else:
+                    self.telegram_delivery_failures += 1
+                    try:
+                        from database.repositories import release_signal_claim
+                        await release_signal_claim(signal, candle_ts)
+                    except Exception as exc:
+                        logger.error(f"SIGNAL_CLAIM_RELEASE_FAILED {pair}: {exc}")
                     self.signals[engine].invalidate(pair, engine, direction)
                     logger.warning(
                         f"SIGNAL_NOT_DELIVERED {pair} engine={engine} direction={direction}; "
-                        "cooldown_not_set; persistent same-candle claim remains to prevent duplicate retries"
+                        "claim released for a controlled retry"
                     )
         elif disposition == "WATCHLIST":
             self._log_candle_evaluation(
@@ -1088,6 +1096,11 @@ class SignalEngine:
                 logger.info(f"RETEST_SIGNAL_DELIVERED {key} price={delivery_price}")
             else:
                 self.telegram_delivery_failures += 1
+                try:
+                    from database.repositories import release_signal_claim
+                    await release_signal_claim(signal, int(pending["candle_ts"]))
+                except Exception as exc:
+                    logger.error(f"RETEST_CLAIM_RELEASE_FAILED {key}: {exc}")
                 logger.warning(f"RETEST_SIGNAL_NOT_DELIVERED {key}; candidate remains retryable")
                 continue
             await remove("delivered")
@@ -1139,11 +1152,18 @@ class SignalEngine:
             if sl is None or t1 is None:
                 continue
             sl_hit = low <= sl if direction == "LONG" else high >= sl
+            try:
+                from database.repositories import record_signal_outcome
+                await record_signal_outcome(sig, high, "ACTIVE")
+                await record_signal_outcome(sig, low, "ACTIVE")
+            except Exception as exc:
+                logger.warning(f"Outcome metrics update failed for {pair}: {exc}")
             if sl_hit:
                 if self.signals[engine].mark_sl(pair, engine, direction):
                     try:
-                        from database.repositories import update_signal_record
+                        from database.repositories import update_signal_record, record_signal_outcome
                         await update_signal_record(sig, "closed_sl")
+                        await record_signal_outcome(sig, float(sl), "STOP")
                     except Exception as exc:
                         logger.error(f"Persist SL outcome failed for {pair}: {exc}")
                 continue
