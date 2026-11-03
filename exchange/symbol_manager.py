@@ -222,7 +222,10 @@ class SymbolManager:
             else:
                 pairs.sort(key=lambda pair: (preferences.get(self._norm(pair), 10**9), pair))
                 logger.warning(f"{label}: no Futures volume; using configured order then symbol order")
-            return pairs[:limit]
+            # Keep the full ranked Normal candidate list. The active-universe
+            # selector applies the configured limit after quarantine filtering,
+            # allowing the next liquid market to backfill a quarantined symbol.
+            return pairs
 
         self._ranked_normal = rank_universe(normal_rank, settings.normal_symbol_limit, "Normal")
         self._ranked_momentum = rank_universe(momentum_rank, settings.momentum_symbol_limit, "Momentum")

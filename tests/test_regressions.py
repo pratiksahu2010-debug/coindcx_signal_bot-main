@@ -87,9 +87,19 @@ def test_normal_and_momentum_candle_cursors_are_independent():
     assert engine.normal_scoring is not engine.momentum_scoring
 
 
-def test_dynamic_symbol_universe_uses_ticker_liquidity_and_active_status():
+def test_dynamic_symbol_universe_uses_ticker_liquidity_and_active_status(monkeypatch):
     import asyncio
     from exchange.symbol_manager import SymbolManager
+
+    # Normal scans are liquidity-ranked; Momentum/ORB use only their configured
+    # static whitelist, even when other active Futures markets are discovered.
+    monkeypatch.setattr(
+        SymbolManager, "_load_yaml",
+        lambda self, path: (
+            ["B-BTC_USDT", "B-ETH_USDT", "B-LOW_USDT"]
+            if path.endswith("momentum_symbols.yaml") else []
+        ),
+    )
 
     class FakeRest:
         async def get_market_details(self):
@@ -110,9 +120,10 @@ def test_dynamic_symbol_universe_uses_ticker_liquidity_and_active_status():
     async def run():
         manager = SymbolManager(FakeRest())
         await manager.load_and_validate()
-        assert manager.normal_symbols[:3] == ["B-BTC_USDT", "B-ETH_USDT", "B-LOW_USDT"]
-        assert manager.momentum_symbols[:3] == ["B-BTC_USDT", "B-ETH_USDT", "B-LOW_USDT"]
+        assert manager.normal_symbols[:2] == ["B-BTC_USDT", "B-ETH_USDT"]
+        assert manager.momentum_symbols == ["B-BTC_USDT", "B-ETH_USDT", "B-LOW_USDT"]
         assert "B-OFF_USDT" not in manager.valid_pairs
+        assert "B-LOW_USDT" in manager.valid_pairs
 
     asyncio.run(run())
 
@@ -263,11 +274,20 @@ def test_rest_client_rejects_historical_stale_market_candles():
 
 
 
-def test_stale_market_quarantine_filters_both_engine_universes_and_restores():
+def test_stale_market_quarantine_filters_both_engine_universes_and_restores(monkeypatch):
     import asyncio
     import time
     from exchange.symbol_manager import SymbolManager
     from config import settings
+
+    # Include BAD explicitly in the static Momentum/ORB list for this fixture.
+    monkeypatch.setattr(
+        SymbolManager, "_load_yaml",
+        lambda self, path: (
+            ["B-BAD_USDT", "B-BTC_USDT", "B-ETH_USDT"]
+            if path.endswith("momentum_symbols.yaml") else []
+        ),
+    )
 
     class FakeRest:
         def __init__(self):
@@ -311,7 +331,8 @@ def test_stale_market_quarantine_filters_both_engine_universes_and_restores():
             assert "B-BAD_USDT" not in manager.normal_symbols
             assert "B-BAD_USDT" not in manager.momentum_symbols
             assert len(manager.normal_symbols) == 2
-            assert len(manager.momentum_symbols) == 3
+            # Static whitelist does not backfill SOL when BAD is quarantined.
+            assert manager.momentum_symbols == ["B-BTC_USDT", "B-ETH_USDT"]
             assert "B-BAD_USDT" in manager.skipped_reasons
 
             # Simulate the 15-minute retry deadline and recovery of both feeds.
@@ -321,7 +342,7 @@ def test_stale_market_quarantine_filters_both_engine_universes_and_restores():
             await manager.refresh_universes()
             assert "B-BAD_USDT" not in manager._quarantined
             assert manager.normal_symbols[0] == "B-BAD_USDT"
-            assert manager.momentum_symbols[0] == "B-BAD_USDT"
+            assert manager.momentum_symbols == ["B-BAD_USDT", "B-BTC_USDT", "B-ETH_USDT"]
             assert "B-BAD_USDT" not in manager.skipped_reasons
         finally:
             settings.normal_symbol_limit, settings.momentum_symbol_limit = old_normal, old_momentum
@@ -578,9 +599,18 @@ def test_tp_outcome_is_persisted_only_once_per_target(monkeypatch):
     asyncio.run(run())
 
 
-def test_liquidity_universe_reorders_when_24h_volume_changes():
+def test_liquidity_universe_reorders_when_24h_volume_changes(monkeypatch):
     import asyncio
     from exchange.symbol_manager import SymbolManager
+
+    # Normal engine follows liquidity; Momentum/ORB retain static whitelist order.
+    monkeypatch.setattr(
+        SymbolManager, "_load_yaml",
+        lambda self, path: (
+            ["B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT"]
+            if path.endswith("momentum_symbols.yaml") else []
+        ),
+    )
 
     class FakeRest:
         def __init__(self):
@@ -607,7 +637,7 @@ def test_liquidity_universe_reorders_when_24h_volume_changes():
         manager._last_liquidity_refresh = 0
         await manager.refresh_universes()
         assert manager.normal_symbols[0] == "B-ETH_USDT"
-        assert manager.momentum_symbols[0] == "B-ETH_USDT"
+        assert manager.momentum_symbols == ["B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT"]
 
     asyncio.run(run())
 
