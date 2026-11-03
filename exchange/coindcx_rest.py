@@ -20,6 +20,7 @@ class CoinDCXRest:
         self._ticker_snapshot = None
         self._ticker_snapshot_at = 0.0
         self._ticker_lock = asyncio.Lock()
+        self._ws_prices: Dict[str, tuple] = {}
         # pair -> timeframe -> consecutive stale API observations
         self._stale_market_timeframes: Dict[str, Dict[str, int]] = {}
 
@@ -77,9 +78,29 @@ class CoinDCXRest:
         """Return a copy of stale candle-feed observations for universe quarantine."""
         return {pair: dict(timeframes) for pair, timeframes in self._stale_market_timeframes.items()}
 
+    def set_ws_prices(self, prices: Dict[str, Any], timestamp_ms: Optional[int] = None) -> None:
+        """Accept a public futures price snapshot from the optional socket stream."""
+        now_ms = int(time.time() * 1000)
+        ts = int(timestamp_ms or now_ms)
+        if ts < 10**12:
+            ts *= 1000
+        if abs(now_ms - ts) > 10000:
+            return
+        for market, raw_price in prices.items():
+            try:
+                value = float(raw_price)
+                if value > 0 and __import__("math").isfinite(value):
+                    self._ws_prices[self._market_key(market)] = (value, ts)
+            except (TypeError, ValueError, OverflowError):
+                continue
+
     async def get_last_price(self, pair: str) -> Optional[float]:
-        """Fetch a timestamp-validated public ticker price; never place orders."""
+        """Prefer a fresh futures socket price; fall back to validated REST ticker."""
         wanted = self._market_key(pair)
+        cached = self._ws_prices.get(wanted)
+        now_ms = int(time.time() * 1000)
+        if cached and 0 <= now_ms - cached[1] <= 5000:
+            return cached[0]
         rows = await self.get_ticker()
         now_ms = int(time.time() * 1000)
         for row in rows:
