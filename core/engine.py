@@ -15,7 +15,7 @@ from core.scoring_engine import ScoringEngine
 from core.cooldown_manager import CooldownManager
 from core.watchlist_manager import WatchlistManager
 from core.signal_manager import SignalManager
-from core.risk_calculator import calculate_risk, is_entry_price_actionable
+from core.risk_calculator import calculate_risk, is_entry_price_actionable, classify_entry_state
 from strategies.normal.strategy_manager import detect_strategy
 from strategies.momentum.strategy_manager import detect_momentum_state
 from indicators import (
@@ -543,6 +543,7 @@ class SignalEngine:
             bb = bollinger_bands(close, 20, 2.0)
             kc = keltner_channels(high, low, close, 20, 1.5)
             squeeze_release = False
+            compression_active = False
             bw_expand = False
             bw_now = bw_prev = None
             if bb is not None and kc is not None and len(close) >= 22:
@@ -567,6 +568,7 @@ class SignalEngine:
                             recent_compression = True
                             break
                     now_released = upper_bb > upper_kc or lower_bb < lower_kc
+                    compression_active = recent_compression and not now_released
                     squeeze_release = recent_compression and now_released
                     bw_prev = bandwidth(p_upper,p_lower,p_mid)
                     bw_expand = bw_now is not None and bw_prev is not None and bw_now > bw_prev * 1.03
@@ -587,6 +589,7 @@ class SignalEngine:
             rsi_accel = len(valid_rsi)>=3 and ((valid_rsi[-1]>valid_rsi[-2]>valid_rsi[-3]) if direction=="LONG" else (valid_rsi[-1]<valid_rsi[-2]<valid_rsi[-3]))
             roc_v = roc(close,10)
             indicators["squeeze_release"] = squeeze_release
+            indicators["compression_active"] = compression_active
             indicators["bw_expand"] = bw_expand
             indicators["atr_expansion"] = float(atr_expansion)
             indicators["ema_aligned"] = bool(ema9 is not None and ema21 is not None and ema50 is not None and
@@ -724,11 +727,16 @@ class SignalEngine:
                 self._last_processed.setdefault(engine, {})[pair] = candle_ts
                 return
             zone_low, zone_high = risk.entry_zone_low, risk.entry_zone_high
-            if live_price is None or not is_entry_price_actionable(live_price, zone_low, zone_high):
+            entry_state = (
+                classify_entry_state(live_price, risk.entry, zone_low, zone_high, direction)
+                if live_price is not None else "EXPIRED"
+            )
+            if entry_state != "IMMEDIATE":
                 self._last_processed.setdefault(engine, {})[pair] = candle_ts
                 logger.info(
-                    f"ENTRY_MOVED_SKIP {pair} engine={engine} direction={direction} "
-                    f"live_price={live_price} entry_zone={zone_low}-{zone_high}"
+                    f"ENTRY_{entry_state}_SKIP {pair} engine={engine} direction={direction} "
+                    f"live_price={live_price} entry_zone={zone_low}-{zone_high}; "
+                    "candidate must be re-evaluated on a fresh candle"
                 )
                 return
             # Recheck freshness after the extra ticker request.
@@ -766,7 +774,7 @@ class SignalEngine:
                     delivery_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
                     if (
                         delivery_price is None
-                        or not is_entry_price_actionable(delivery_price, zone_low, zone_high)
+                        or classify_entry_state(delivery_price, risk.entry, zone_low, zone_high, direction) != "IMMEDIATE"
                         or delivery_age < 0
                         or delivery_age > settings.max_signal_age_seconds
                     ):
