@@ -1,6 +1,7 @@
 """Persistence regression tests for pending retests and signal outcomes."""
 import asyncio
 from datetime import datetime, timezone
+import pytest
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
@@ -46,7 +47,7 @@ def test_signal_outcome_report_groups_by_engine_and_strategy(monkeypatch):
         report = await repositories.signal_performance_report(days=30)
         row = report["groups"]["momentum:EXPLOSION"]
         assert row["count"] == 1
-        assert row["avg_mfe_pct"] == 2.0
-        assert row["avg_mae_pct"] == -1.0
+        assert row["avg_mfe_pct"] == pytest.approx(2.0)
+        assert row["avg_mae_pct"] == pytest.approx(-1.0)
         await engine.dispose()
     asyncio.run(run())
