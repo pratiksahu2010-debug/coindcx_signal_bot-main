@@ -1,6 +1,7 @@
 """Structure-aware ATR risk levels for signal-only alerts."""
 from typing import Optional
 from dataclasses import dataclass
+from config import settings
 
 @dataclass
 class RiskLevels:
@@ -10,7 +11,8 @@ class RiskLevels:
 
 def calculate_risk(price: float, atr: float, direction: str, atr_mult_sl: float=1.5,
                    atr_mult_tp1: float=1.5, atr_mult_tp2: float=2.5, atr_mult_tp3: float=4.0,
-                   swing_low: Optional[float]=None, swing_high: Optional[float]=None) -> Optional[RiskLevels]:
+                   swing_low: Optional[float]=None, swing_high: Optional[float]=None,
+                   cost_bps: Optional[float]=None) -> Optional[RiskLevels]:
     if not price or not atr or price<=0 or atr<=0 or direction not in ("LONG","SHORT"): return None
     is_long=direction=="LONG"
     # Structural stop with an ATR safety buffer; reject pathological distant structure.
