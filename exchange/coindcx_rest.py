@@ -103,7 +103,7 @@ class CoinDCXRest:
                         "market": market,
                         "last_price": quote.get("ls") or quote.get("last_price") or quote.get("lastPrice"),
                         "mark_price": quote.get("mp"),
-                        "timestamp": quote.get("ts") or quote.get("timestamp") or data.get("ts", 0),
+                        "timestamp": quote.get("ts") or quote.get("timestamp") or (data.get("ts") if isinstance(data, dict) else None) or int(time.time() * 1000),
                         "quote_volume": quote.get("qv") or quote.get("quote_volume") or 0,
                         "base_volume": quote.get("bv") or quote.get("volume") or 0,
                     })
