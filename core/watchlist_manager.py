@@ -21,8 +21,16 @@ class WatchlistManager:
         key = self._key(pair, engine, direction)
         now = datetime.now(timezone.utc)
         signal = dict(signal)
-        signal["added_at"] = utc_iso(now)
-        signal["expires_at"] = utc_iso(now + self.ttl)
+        previous = self._entries.get(key)
+        # Refresh the latest observation without extending the original setup
+        # lifetime on every intrabar update. This prevents stale setups living
+        # forever merely because a feed keeps sending updates.
+        if previous and not self._expired(previous):
+            signal["added_at"] = previous.get("added_at", utc_iso(now))
+            signal["expires_at"] = previous.get("expires_at", utc_iso(now + self.ttl))
+        else:
+            signal["added_at"] = utc_iso(now)
+            signal["expires_at"] = utc_iso(now + self.ttl)
         self._entries[key] = signal
         self._evict()
         logger.info(f"Watchlist add {key} score={signal.get('score')}")
