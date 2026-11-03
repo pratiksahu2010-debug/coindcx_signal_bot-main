@@ -510,9 +510,9 @@ class SignalEngine:
                 elif ema9 < ema21:
                     direction = "SHORT"
         else:
-            # Momentum may lead the EMA crossover: use short ROC + MACD sign
-            # as an independent early directional candidate. EMA alignment is
-            # retained as quality evidence, never the initial direction gate.
+            # Momentum may lead EMA/MACD confirmation: short ROC seeds the
+            # directional candidate. MACD remains a trade-alert gate, while
+            # PRE_EXPLOSION can be observed before MACD fully turns.
             short_roc = ((float(close[-1]) / float(close[-4]) - 1.0) * 100.0
                          if len(close) >= 4 and float(close[-4]) > 0 else 0.0)
             if orb_result.get("state") in ("ORB_BREAKOUT", "ORB_RETEST"):
@@ -750,6 +750,11 @@ class SignalEngine:
 
         swing_low = float(np.min(low[-8:-1])) if len(low) >= 8 else None
         swing_high = float(np.max(high[-8:-1])) if len(high) >= 8 else None
+        if engine == "momentum" and strategy in ("ORB_BREAKOUT", "ORB_RETEST"):
+            # ORB invalidation belongs beyond the opening-range opposite edge,
+            # not an arbitrary last-seven-candle micro swing.
+            swing_low = indicators.get("orb_range_low")
+            swing_high = indicators.get("orb_range_high")
         risk = calculate_risk(close[-1], atr_v or 0, direction,
                               swing_low=swing_low, swing_high=swing_high) if atr_v else None
         strategy = strategy if engine == "normal" else momentum_state
