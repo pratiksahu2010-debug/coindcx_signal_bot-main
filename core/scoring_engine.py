@@ -40,16 +40,16 @@ class ScoringEngine:
     """Normal engine default weights (sum = 10)."""
 
     NORMAL_WEIGHTS = {
-        "ema_trend": 1.0,
-        "vwap": 1.0,
-        "adx": 1.0,
-        "rsi": 1.0,
-        "macd": 1.0,
-        "rvol": 1.0,
-        "atr": 1.0,
-        "candle": 1.0,
-        "confirm_15m": 1.0,
-        "structure": 1.0,
+        # Nine non-MACD quality dimensions retain the original 10-point scale.
+        "ema_trend": 10.0 / 9.0,
+        "vwap": 10.0 / 9.0,
+        "adx": 10.0 / 9.0,
+        "rsi": 10.0 / 9.0,
+        "rvol": 10.0 / 9.0,
+        "atr": 10.0 / 9.0,
+        "candle": 10.0 / 9.0,
+        "confirm_15m": 10.0 / 9.0,
+        "structure": 10.0 / 9.0,
     }
 
     MOMENTUM_WEIGHTS = {
@@ -125,18 +125,6 @@ class ScoringEngine:
             else:
                 expl = f"RSI {rsi_v:.1f} against direction"
         comps.append(ScoreComponent("RSI", pts, w["rsi"], rsi_v, direction, expl, pts > 0))
-
-        # MACD
-        macd_h = indicators.get("macd_hist")
-        pts = 0.0
-        expl = "N/A"
-        if macd_h is not None:
-            if (is_long and macd_h > 0) or (not is_long and macd_h < 0):
-                pts = w["macd"]
-                expl = f"MACD hist {macd_h:.4f} aligned"
-            else:
-                expl = f"MACD hist {macd_h:.4f} against"
-        comps.append(ScoreComponent("MACD", pts, w["macd"], macd_h, direction, expl, pts > 0))
 
         # RVOL
         rvol = indicators.get("rvol")

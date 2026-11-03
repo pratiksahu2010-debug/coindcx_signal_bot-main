@@ -761,3 +761,36 @@ def test_watchlist_refresh_does_not_extend_original_setup_expiry():
     manager.add({**item, "score": 6.0, "price": 101.0})
     assert manager._entries[key]["expires_at"] == original_expiry
     assert manager._entries[key]["score"] == 6.0
+
+
+def test_normal_engine_has_no_macd_gate():
+    from core.engine import _normal_threshold_gates
+
+    base = {
+        "ema9": 102.0, "ema21": 100.0, "close": 103.0, "vwap": 101.0,
+        "adx": 30.0, "confirm_15m": True, "rsi": 58.0,
+    }
+    # Missing or opposing MACD data must not affect Normal Engine approval.
+    without_macd = _normal_threshold_gates(base, "LONG", 25.0)
+    opposing_macd = _normal_threshold_gates({**base, "macd_hist": -999.0}, "LONG", 25.0)
+    assert len(without_macd) == 5
+    assert all(without_macd.values())
+    assert opposing_macd == without_macd
+
+
+def test_normal_scoring_has_no_macd_component_and_keeps_ten_point_scale():
+    import pytest
+    from core.scoring_engine import ScoringEngine
+
+    indicators = {
+        "ema9": 102.0, "ema21": 100.0, "close": 103.0, "vwap": 101.0,
+        "adx": 35.0, "rsi": 60.0, "rvol": 2.0, "atr_pct": 0.8,
+        "body_ratio": 0.8, "confirm_15m": True,
+        "structure_direction_ok": True,
+        "macd_hist": -999.0,
+    }
+    result = ScoringEngine().score_normal(indicators, "LONG")
+    assert all(component.name != "MACD" for component in result.components)
+    assert len(result.components) == 9
+    assert sum(component.max_points for component in result.components) == pytest.approx(10.0)
+    assert result.total == pytest.approx(10.0)
