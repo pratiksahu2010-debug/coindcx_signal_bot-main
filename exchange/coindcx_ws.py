@@ -13,8 +13,9 @@ from utils.logger import logger
 
 
 class CoinDCXFuturesStream:
-    def __init__(self, candle_builder):
+    def __init__(self, candle_builder, rest_client=None):
         self.candles = candle_builder
+        self.rest = rest_client
         self.client = socketio.AsyncClient(
             reconnection=True,
             reconnection_attempts=0,
@@ -43,6 +44,20 @@ class CoinDCXFuturesStream:
         @self.client.on("candlestick")
         async def on_candlestick(message):
             self._handle_candlestick(message)
+
+        @self.client.on("currentPrices@futures#update")
+        async def on_prices(message):
+            self._handle_prices(message)
+
+    def _handle_prices(self, message: Any) -> None:
+        if self.rest is None or not isinstance(message, dict):
+            return
+        payload = message.get("data", message)
+        if not isinstance(payload, dict):
+            return
+        prices = payload.get("prices") or payload.get("data")
+        if isinstance(prices, dict):
+            self.rest.set_ws_prices(prices, payload.get("ts"))
 
     def _handle_candlestick(self, message: Any) -> None:
         if not isinstance(message, dict):
@@ -90,6 +105,9 @@ class CoinDCXFuturesStream:
                 transports=["websocket"],
                 wait_timeout=12,
             )
+            # A single public futures price channel provides live LTP for the universe.
+            await self.client.emit("join", {"channelName": "currentPrices@futures@1s"})
+            self._channels.add("currentPrices@futures@1s")
             # CoinDCX Futures public candle channel naming per API docs.
             for pair in sorted(set(pairs)):
                 for interval in ("5m", "15m"):
