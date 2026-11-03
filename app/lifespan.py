@@ -46,6 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ws_stream.set_candle_callback(engine.on_intrabar_candle)
     if database_ready:
         await engine.restore_active_signals()
+        await engine.restore_pending_retests()
 
     # Telegram
     tg = TelegramBot()
@@ -83,8 +84,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # FastAPI service and lightweight health endpoints alive for Render, but
     # expose an explicit degraded state until database initialization succeeds.
     scan_task = None
+    retest_task = None
     if database_ready:
         scan_task = asyncio.create_task(engine.run_scan_loop(app))
+        retest_task = asyncio.create_task(engine.pending_retest_monitor_loop(interval_seconds=2.0))
     else:
         app.state.bot_state["normal_engine"] = "paused_database_unavailable"
         app.state.bot_state["momentum_engine"] = "paused_database_unavailable"
@@ -99,12 +102,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     logger.info("Shutting down...")
-    if scan_task is not None:
-        scan_task.cancel()
-        try:
-            await scan_task
-        except asyncio.CancelledError:
-            pass
+    for task in (scan_task, retest_task):
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     await engine.shutdown()
     await ws_stream.stop()
     await tg.stop()
