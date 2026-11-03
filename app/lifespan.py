@@ -12,6 +12,7 @@ from utils.memory_monitor import check_memory
 from exchange.coindcx_rest import CoinDCXRest
 from exchange.symbol_manager import SymbolManager
 from exchange.candle_builder import CandleBuilder
+from exchange.coindcx_ws import CoinDCXFuturesStream
 from core.engine import SignalEngine
 from tgbot.bot import TelegramBot
 from database.db import init_db, dispose_db
@@ -39,6 +40,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.error(f"Symbol validation failed: {e}")
 
     candle_builder = CandleBuilder()
+    ws_stream = CoinDCXFuturesStream(candle_builder)
+    ws_started = await ws_stream.start(set(symbol_mgr.normal_symbols + symbol_mgr.momentum_symbols))
     engine = SignalEngine(rest, symbol_mgr, candle_builder)
     if database_ready:
         await engine.restore_active_signals()
@@ -51,11 +54,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.rest = rest
     app.state.symbol_mgr = symbol_mgr
     app.state.candle_builder = candle_builder
+    app.state.websocket = ws_stream
     app.state.engine = engine
     app.state.telegram = tg
     app.state.start_time = start_time
     app.state.bot_state = {
-        "websocket_status": "disabled_rest_mode" if not settings.enable_websocket else "configured_but_not_started",
+        "websocket_status": ws_stream.status if ws_started else ("rest_fallback" if settings.enable_websocket else "disabled_rest_mode"),
         "normal_engine": "starting" if settings.enable_normal_engine else "disabled",
         "momentum_engine": "starting" if settings.enable_momentum_engine else "disabled",
         "last_market_update": None,
@@ -101,6 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except asyncio.CancelledError:
             pass
     await engine.shutdown()
+    await ws_stream.stop()
     await tg.stop()
     await rest.stop()
     if database_ready:
