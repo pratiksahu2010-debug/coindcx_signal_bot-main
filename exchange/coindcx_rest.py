@@ -134,10 +134,19 @@ class CoinDCXRest:
         except (TypeError, ValueError, OverflowError):
             return None
 
+    # Bound future exchange/host clock skew; never accept arbitrary future quotes.
+    MAX_FUTURES_CLOCK_SKEW_SECONDS = 15.0
+    MAX_REST_TICKER_AGE_SECONDS = 10.0
+    MAX_WS_TICKER_AGE_SECONDS = 5.0
+
     @classmethod
     def _ticker_age_seconds(cls, timestamp: Any, now_ms: int) -> Optional[float]:
         stamp_ms = cls._timestamp_ms(timestamp)
         return (now_ms - stamp_ms) / 1000.0 if stamp_ms is not None else None
+
+    @classmethod
+    def _is_fresh_ticker_age(cls, age: Optional[float], max_age: float) -> bool:
+        return age is not None and -cls.MAX_FUTURES_CLOCK_SKEW_SECONDS <= age <= max_age
 
     @staticmethod
     def _normalize_ticker_row(market: Any, quote: Any, fallback_ts: Any = None) -> Optional[Dict]:
@@ -195,7 +204,7 @@ class CoinDCXRest:
                     age = self._ticker_age_seconds(row.get("timestamp"), now_ms)
                     if price > 0 and __import__("math").isfinite(price):
                         valid_ltp += 1
-                        if age is not None and -5 <= age <= 10:
+                        if self._is_fresh_ticker_age(age, self.MAX_REST_TICKER_AGE_SECONDS):
                             fresh_ages.append(age)
                         else:
                             stale_rows += 1
@@ -228,7 +237,11 @@ class CoinDCXRest:
         now_ms = int(time.time() * 1000)
         accepted = 0
         root_ts = self._timestamp_ms(timestamp_ms) if timestamp_ms is not None else now_ms
-        if root_ts is None or abs(now_ms - root_ts) > 10000:
+        if root_ts is None:
+            return 0
+        root_age = (now_ms - root_ts) / 1000.0
+        if not self._is_fresh_ticker_age(root_age, self.MAX_WS_TICKER_AGE_SECONDS):
+            logger.warning(f"COINDCX_WS_ROOT_TIMESTAMP_REJECTED age_seconds={root_age:.3f} max_future_skew_s={self.MAX_FUTURES_CLOCK_SKEW_SECONDS:g}")
             return 0
         accepted = 0
         for market, raw in prices.items():
@@ -243,7 +256,7 @@ class CoinDCXRest:
                 if (
                     event_ts is not None and price > 0
                     and __import__("math").isfinite(price)
-                    and 0 <= now_ms - event_ts <= 5000
+                    and self._is_fresh_ticker_age((now_ms - event_ts) / 1000.0, self.MAX_WS_TICKER_AGE_SECONDS)
                 ):
                     self._ws_prices[self._market_key(market)] = (price, event_ts)
                     accepted += 1
@@ -258,7 +271,7 @@ class CoinDCXRest:
         wanted = self._market_key(pair)
         cached = self._ws_prices.get(wanted)
         now_ms = int(time.time() * 1000)
-        if cached and 0 <= now_ms - cached[1] <= 5000:
+        if cached and self._is_fresh_ticker_age((now_ms - cached[1]) / 1000.0, self.MAX_WS_TICKER_AGE_SECONDS):
             return cached[0]
         logger.debug(f"FUTURES_LTP_REST_FALLBACK pair={pair} reason=ws_cache_missing_or_stale")
         rows = await self.get_ticker()
@@ -273,7 +286,7 @@ class CoinDCXRest:
             matched += 1
             try:
                 age = self._ticker_age_seconds(row.get("timestamp"), now_ms)
-                if age is None or age < -5 or age > 10:
+                if not self._is_fresh_ticker_age(age, self.MAX_REST_TICKER_AGE_SECONDS):
                     stale += 1
                     logger.warning(
                         f"FUTURES_LTP_ROW_REJECTED pair={pair} matched_market={row.get('market')} "

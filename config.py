@@ -39,7 +39,7 @@ if HAS_PYDANTIC:
         candle_primary_tf: str = Field(default="5m", alias="CANDLE_PRIMARY_TF")
         candle_confirm_tf: str = Field(default="15m", alias="CANDLE_CONFIRM_TF")
         max_candles_buffer: int = Field(default=300, alias="MAX_CANDLES_BUFFER")
-        enable_websocket: bool = Field(default=False, alias="ENABLE_WEBSOCKET")
+        enable_websocket: bool = Field(default=True, alias="ENABLE_WEBSOCKET")
         enable_normal_engine: bool = Field(default=True, alias="ENABLE_NORMAL_ENGINE")
         enable_momentum_engine: bool = Field(default=True, alias="ENABLE_MOMENTUM_ENGINE")
         memory_warning_mb: int = Field(default=400, alias="MEMORY_WARNING_MB")
@@ -91,7 +91,7 @@ else:
             self.candle_primary_tf = os.getenv("CANDLE_PRIMARY_TF", "5m")
             self.candle_confirm_tf = os.getenv("CANDLE_CONFIRM_TF", "15m")
             self.max_candles_buffer = int(os.getenv("MAX_CANDLES_BUFFER", "300"))
-            self.enable_websocket = os.getenv("ENABLE_WEBSOCKET", "false").lower() == "true"
+            self.enable_websocket = os.getenv("ENABLE_WEBSOCKET", "true").lower() == "true"
             self.enable_normal_engine = os.getenv("ENABLE_NORMAL_ENGINE", "true").lower() == "true"
             self.enable_momentum_engine = os.getenv("ENABLE_MOMENTUM_ENGINE", "true").lower() == "true"
             self.memory_warning_mb = int(os.getenv("MEMORY_WARNING_MB", "400"))

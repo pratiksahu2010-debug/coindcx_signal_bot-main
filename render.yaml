@@ -20,7 +20,7 @@ services:
       - key: CANDLE_CONFIRM_TF
         value: "15m"
       - key: ENABLE_WEBSOCKET
-        value: "false"
+        value: "true"
       - key: ENABLE_NORMAL_ENGINE
         value: "true"
       - key: ENABLE_MOMENTUM_ENGINE
