@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo\nimport numpy as np
 
 from strategies.momentum.orb_detector import evaluate
 
@@ -13,11 +13,11 @@ def ts(hour, minute):
 def base_candles(last_open, last_high, last_low, last_close):
     times = [ts(9, 15), ts(9, 20), ts(9, 25), ts(*last_open)]
     return {
-        "time": times,
-        "open": [100.0, 100.2, 100.1, 101.0],
-        "high": [101.0, 101.2, 101.1, last_high],
-        "low": [99.8, 100.0, 99.9, last_low],
-        "close": [100.5, 100.8, 100.7, last_close],
+        "time": np.asarray(times, dtype=np.int64),
+        "open": np.asarray([100.0, 100.2, 100.1, 101.0]),
+        "high": np.asarray([101.0, 101.2, 101.1, last_high]),
+        "low": np.asarray([99.8, 100.0, 99.9, last_low]),
+        "close": np.asarray([100.5, 100.8, 100.7, last_close]),
     }
 
 
