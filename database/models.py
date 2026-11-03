@@ -1,6 +1,6 @@
 """SQLAlchemy models for persistent state."""
 from datetime import datetime
-from sqlalchemy import String, Float, Boolean, DateTime, Text, Integer
+from sqlalchemy import String, Float, Boolean, DateTime, Text, Integer, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column
 from database.db import Base
 
@@ -34,7 +34,7 @@ class SignalDedupRecord(Base):
     """Durable per-pair/direction/candle alert lock shared across both engines."""
     __tablename__ = "signal_dedup"
     dedup_key: Mapped[str] = mapped_column(String(96), primary_key=True)
-    candle_time_ms: Mapped[int] = mapped_column(Integer, default=0)
+    candle_time_ms: Mapped[int] = mapped_column(BigInteger, default=0)
     payload: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
