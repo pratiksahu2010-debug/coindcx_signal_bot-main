@@ -43,6 +43,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ws_stream = CoinDCXFuturesStream(candle_builder, rest)
     ws_started = await ws_stream.start(set(symbol_mgr.normal_symbols + symbol_mgr.momentum_symbols))
     engine = SignalEngine(rest, symbol_mgr, candle_builder)
+    ws_stream.set_candle_callback(engine.on_intrabar_candle)
     if database_ready:
         await engine.restore_active_signals()
 
