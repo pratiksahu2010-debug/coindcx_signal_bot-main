@@ -329,3 +329,23 @@ async def signal_performance_report(days: int = 30) -> dict:
             "avg_mae_pct": sum(x.mae_pct for x in items) / len(items),
             "active": sum(x.outcome == "ACTIVE" for x in items)}
     return {"available": True, "groups": report}
+
+
+async def release_signal_claim(signal: dict, candle_time_ms: int) -> bool:
+    """Release an un-delivered dedup claim so a failed notification can retry."""
+    from sqlalchemy import delete
+    from database import db as database_db
+    from database.models import SignalDedupRecord
+    factory = database_db.SessionLocal
+    if factory is None:
+        return False
+    key = f"{signal['pair']}:{signal['direction']}:{int(candle_time_ms)}"
+    async with factory() as session:
+        try:
+            await session.execute(delete(SignalDedupRecord).where(SignalDedupRecord.dedup_key == key))
+            await session.commit()
+            return True
+        except Exception as exc:
+            await session.rollback()
+            logger.error(f"Signal claim release failed for {key}: {exc}")
+            return False
