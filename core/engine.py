@@ -600,6 +600,12 @@ class SignalEngine:
             result = self.momentum_scoring.score_momentum(indicators, direction)
             strategy = momentum_state
 
+        # A Normal candidate has already passed all six mandatory gates.
+        # Do not label it WATCHLIST/NONE merely because optional score components
+        # (RVOL, ATR, candle quality, structure) contribute fewer points.
+        if engine == "normal" and result.grade in ("NONE", "WATCHLIST"):
+            result.grade = "SIGNAL"
+
         score_parts = ",".join(
             f"{c.name}:{c.points:g}/{c.max_points:g}" for c in result.components
         )
