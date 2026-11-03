@@ -115,7 +115,7 @@ class CoinDCXFuturesStream:
                 wait_timeout=12,
             )
             # A single public futures price channel provides live LTP for the universe.
-            await self.client.emit("join", {"channelName": "currentPrices@futures@1s"})
+            await self.client.emit("join", {"channelName": "currentPrices@futures@rt"})
             self._channels.add("currentPrices@futures@1s")
             # CoinDCX Futures public candle channel naming per API docs.
             for pair in sorted(set(pairs)):
@@ -123,7 +123,7 @@ class CoinDCXFuturesStream:
                     channel = f"{pair}_{interval}-futures"
                     await self.client.emit("join", {"channelName": channel})
                     self._channels.add(channel)
-            logger.info(f"COINDCX_WS_SUBSCRIBED channels={len(self._channels)}")
+            logger.info(f"COINDCX_WS_SUBSCRIBED channels={len(self._channels)} price_channel=currentPrices@futures@rt")
             return True
         except Exception as exc:
             logger.warning(f"COINDCX_WS_START_FAILED REST_fallback=true error={exc}")
