@@ -51,7 +51,7 @@ async def test_futures_price_endpoint_normalizes_nested_payload_and_ltp(monkeypa
 
     async def fake_get(url, params=None):
         assert url.endswith("/market_data/v3/current_prices/futures/rt")
-        return {"prices": {"B-BTC_USDT": {"ls": "65000", "mp": "65100"}}}
+        return {"ts": now_ms, "prices": {"B-BTC_USDT": {"ls": "65000", "mp": "65100"}}}
 
     client._get = fake_get
     rows = await client.get_ticker()
