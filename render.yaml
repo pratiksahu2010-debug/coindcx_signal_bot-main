@@ -3,6 +3,7 @@ services:
     name: coindcx-signal-bot
     runtime: python
     plan: free
+    # Keep one service instance initially; startCommand uses one Uvicorn worker.
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
@@ -36,6 +37,6 @@ services:
       - key: TELEGRAM_ADMIN_IDS
         sync: false
       # Set to the Internal Database URL of a managed PostgreSQL instance.
-      # Production startup fails closed until PostgreSQL is configured.
+      # Production scanning stays disabled until connectivity and schema checks pass.
       - key: DATABASE_URL
         sync: false
