@@ -34,7 +34,7 @@ def _score_disposition(score: float, signal_threshold: float) -> str:
     """Classify momentum scores without allowing watchlist scores to become alerts."""
     if score >= max(7.0, signal_threshold):
         return "SIGNAL"
-    if score >= 6.0:
+    if score >= 5.5:
         return "WATCHLIST"
     return "REJECT"
 
@@ -650,11 +650,11 @@ class SignalEngine:
         score_parts = ",".join(
             f"{c.name}:{c.points:g}/{c.max_points:g}" for c in result.components
         )
-        if engine == "momentum" and result.total < 6.0:
+        if engine == "momentum" and result.total < 5.5:
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
                 confirm_candle_time_ms, indicators, "REJECT",
-                failed=[f"score_below_watchlist_min({result.total:.2f})"], strategy=strategy,
+                failed=[f"score_below_watchlist_min_5_5({result.total:.2f})"], strategy=strategy,
                 score=result.total, score_parts=score_parts,
             )
             return
