@@ -1,4 +1,4 @@
-"""Database session management — PostgreSQL preferred, SQLite for local."""
+"""Async SQLAlchemy database lifecycle with production PostgreSQL enforcement."""
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import text
@@ -58,14 +58,28 @@ async def init_db() -> None:
         )
 
     SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # Remove persisted state belonging only to the retired Phase 3 engine.
-        await conn.execute(text("DELETE FROM signals WHERE engine = 'signals'"))
-        await conn.execute(text("DELETE FROM watchlist WHERE engine = 'signals'"))
-        await conn.execute(text("DELETE FROM signal_dedup WHERE dedup_key LIKE 'signals:%'"))
-        await conn.execute(text("DROP TABLE IF EXISTS step_channel_state"))
-    logger.info("Database initialized; obsolete Phase 3 state removed")
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
+            await conn.run_sync(Base.metadata.create_all)
+            existing = await conn.run_sync(
+                lambda sync_conn: __import__("sqlalchemy").inspect(sync_conn).get_table_names()
+            )
+            required = set(Base.metadata.tables)
+            missing = sorted(required - set(existing))
+            if missing:
+                raise RuntimeError(f"Database schema check failed; missing tables: {missing}")
+            await conn.execute(text("DELETE FROM signals WHERE engine = 'signals'"))
+            await conn.execute(text("DELETE FROM watchlist WHERE engine = 'signals'"))
+            await conn.execute(text("DELETE FROM signal_dedup WHERE dedup_key LIKE 'signals:%'"))
+            await conn.execute(text("DROP TABLE IF EXISTS step_channel_state"))
+        logger.info("DATABASE_READY dialect=%s connectivity=ok schema=ok tables=%d", engine.dialect.name, len(required))
+    except Exception:
+        logger.exception("DATABASE_STARTUP_CHECK_FAILED connectivity_or_schema=true")
+        await engine.dispose()
+        engine = None
+        SessionLocal = None
+        raise
 
 
 async def get_session() -> AsyncSession:
