@@ -18,6 +18,7 @@ from core.signal_manager import SignalManager
 from core.risk_calculator import calculate_risk, is_entry_price_actionable, classify_entry_state
 from strategies.normal.strategy_manager import detect_strategy
 from strategies.momentum.strategy_manager import detect_momentum_state
+from strategies.momentum import orb_detector
 from indicators import (
     ema, rsi, atr, adx, macd, vwap, relative_volume,
     bollinger_bands, bandwidth, keltner_channels, roc,
@@ -489,6 +490,16 @@ class SignalEngine:
             "rsi_prev": rsi(close[:-1],14),
         }
 
+        # ORB is evaluated on the same completed-candle arrays as Momentum.
+        # Its directional breakout can seed a candidate before MACD fully turns.
+        orb_result = orb_detector.evaluate(arr, atr_v, rvol) if engine == "momentum" else {}
+        indicators["orb_state"] = orb_result.get("state")
+        indicators["orb_range_high"] = orb_result.get("range_high")
+        indicators["orb_range_low"] = orb_result.get("range_low")
+        indicators["orb_breakout_level"] = orb_result.get("breakout_level")
+        indicators["orb_breakout_extension_atr"] = orb_result.get("breakout_extension_atr")
+        indicators["orb_range_width_atr"] = orb_result.get("range_width_atr")
+
         # Determine direction from EMA9/EMA21 only. VWAP is evaluated as its
         # own mandatory gate below; candle direction/body is not a gate.
         direction = None
@@ -499,14 +510,18 @@ class SignalEngine:
                 elif ema9 < ema21:
                     direction = "SHORT"
         else:
-            # Momentum may lead the EMA crossover: use short ROC + MACD sign
-            # as an independent early directional candidate. EMA alignment is
-            # retained as quality evidence, never the initial direction gate.
+            # Momentum may lead EMA/MACD confirmation: short ROC seeds the
+            # directional candidate. MACD remains a trade-alert gate, while
+            # PRE_EXPLOSION can be observed before MACD fully turns.
             short_roc = ((float(close[-1]) / float(close[-4]) - 1.0) * 100.0
                          if len(close) >= 4 and float(close[-4]) > 0 else 0.0)
-            if macd_hist is not None and macd_hist > 0 and short_roc > 0:
+            if orb_result.get("state") in ("ORB_BREAKOUT", "ORB_RETEST"):
+                direction = orb_result.get("direction")
+            elif short_roc > 0:
+                # ROC can seed an early watch candidate; MACD remains a hard
+                # confirmation for Momentum trade alerts later in the pipeline.
                 direction = "LONG"
-            elif macd_hist is not None and macd_hist < 0 and short_roc < 0:
+            elif short_roc < 0:
                 direction = "SHORT"
 
         if not direction:
@@ -571,14 +586,9 @@ class SignalEngine:
                 return
             result = self.normal_scoring.score_normal(indicators, direction)
         else:
-            # Momentum engine uses its own configured minimum trend-strength gate.
-            if adx_v is None or adx_v < max(12.0, settings.momentum_adx_explosion * 0.70):
-                self._log_candle_evaluation(
-                    pair, engine, direction, candle_ts, candle_close_ms,
-                    confirm_candle_time_ms, indicators, "REJECT",
-                    failed=["momentum_adx_min"], strategy="NOT_EVALUATED",
-                )
-                return
+            # Do not impose ADX before regime classification: PRE_EXPLOSION and
+            # first ignition often occur before lagging ADX reaches trend thresholds.
+            # ADX remains a quality feature for CONTINUATION, not an early-setup veto.
             # Momentum extras
             bb = bollinger_bands(close, 20, 2.0)
             kc = keltner_channels(high, low, close, 20, 1.5)
@@ -643,8 +653,15 @@ class SignalEngine:
                 (direction == "LONG" and resistance is not None and close[-1] > resistance) or
                 (direction == "SHORT" and support is not None and close[-1] < support))
             indicators["structure_direction_ok"] = indicators["structure_break"]
+            # Evaluate the dedicated IST ORB on the same active Momentum universe.
+            # ORB has its own range/volume/extension rules and shares only the
+            # common risk, freshness, deduplication and delivery pipeline.
             # Momentum must be a directional expansion, not merely a high score.
-            momentum_state = detect_momentum_state(indicators)
+            momentum_state = (
+                orb_result.get("state") if orb_result.get("state") in ("ORB_BREAKOUT", "ORB_RETEST")
+                and orb_result.get("direction") == direction
+                else detect_momentum_state(indicators)
+            )
             if momentum_state == "PRE_EXPLOSION":
                 # Compression + early participation is a watch state only.
                 # It must never generate a Telegram trade alert before release.
@@ -662,13 +679,32 @@ class SignalEngine:
                     "timestamp": utc_iso(utc_now()),
                 })
                 return
-            valid_momentum_state = momentum_state in ("EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION")
+            valid_momentum_state = momentum_state in (
+                "EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION", "ORB_BREAKOUT", "ORB_RETEST"
+            )
+            breakout_extension = indicators.get("orb_breakout_extension_atr")
+            if momentum_state in ("ORB_BREAKOUT", "ORB_RETEST"):
+                momentum_entry_actionable = (
+                    breakout_extension is not None and breakout_extension <= 0.80
+                    and extension <= 2.00
+                )
+            else:
+                structure_extension = (
+                    abs(float(close[-1]) - float(resistance if direction == "LONG" else support)) / atr_v
+                    if structure_ok and atr_v and
+                    (resistance if direction == "LONG" else support) is not None
+                    else 0.0
+                )
+                momentum_entry_actionable = (
+                    extension <= 1.75 and
+                    (not indicators["structure_break"] or structure_extension <= 0.80)
+                )
             momentum_gates = {
                 "momentum_state": valid_momentum_state,
-                "macd_direction": bool(indicators["macd_direction_ok"]),
+                "macd_direction": bool(indicators["macd_direction_ok"] or momentum_state in ("ORB_BREAKOUT", "ORB_RETEST")),
                 # A 15m close, DI cross and large candle body can lag the move.
-                # Keep higher-timeframe context and candle shape as diagnostics.
-                "not_chasing_or_structure_break": bool(indicators["not_chasing"] or indicators["structure_break"]),
+                # A structure break no longer bypasses extension protection.
+                "anti_chase_and_breakout_extension": bool(momentum_entry_actionable),
             }
             failed = [name for name, passed in momentum_gates.items() if not passed]
             if failed:
@@ -678,7 +714,11 @@ class SignalEngine:
                     strategy=momentum_state,
                 )
                 return
-            result = self.momentum_scoring.score_momentum(indicators, direction)
+            result = (
+                self.momentum_scoring.score_orb(indicators, direction)
+                if momentum_state in ("ORB_BREAKOUT", "ORB_RETEST")
+                else self.momentum_scoring.score_momentum(indicators, direction)
+            )
             strategy = momentum_state
 
         # A Normal candidate has already passed all six mandatory gates.
@@ -710,6 +750,11 @@ class SignalEngine:
 
         swing_low = float(np.min(low[-8:-1])) if len(low) >= 8 else None
         swing_high = float(np.max(high[-8:-1])) if len(high) >= 8 else None
+        if engine == "momentum" and strategy in ("ORB_BREAKOUT", "ORB_RETEST"):
+            # ORB invalidation belongs beyond the opening-range opposite edge,
+            # not an arbitrary last-seven-candle micro swing.
+            swing_low = indicators.get("orb_range_low")
+            swing_high = indicators.get("orb_range_high")
         risk = calculate_risk(close[-1], atr_v or 0, direction,
                               swing_low=swing_low, swing_high=swing_high) if atr_v else None
         strategy = strategy if engine == "normal" else momentum_state

@@ -103,3 +103,22 @@ def test_normal_rsi_scoring_does_not_penalize_strong_directional_momentum():
     }, "SHORT")
     assert next(c for c in long_result.components if c.name == "RSI").points == 1.0
     assert next(c for c in short_result.components if c.name == "RSI").points == 1.0
+
+def test_orb_scoring_rewards_clean_breakout_and_penalizes_extension():
+    from core.scoring_engine import ScoringEngine
+
+    engine = ScoringEngine()
+    clean = engine.score_orb({
+        "rvol": 1.8, "body_ratio": 0.70, "close_location": 0.85,
+        "orb_breakout_extension_atr": 0.25, "orb_range_width_atr": 0.8,
+        "ema_aligned": True, "macd_direction_ok": True,
+        "roc_direction_ok": True,
+    }, "LONG")
+    stretched = engine.score_orb({
+        "rvol": 1.8, "body_ratio": 0.70, "close_location": 0.85,
+        "orb_breakout_extension_atr": 0.75, "orb_range_width_atr": 0.8,
+        "ema_aligned": True, "macd_direction_ok": True,
+        "roc_direction_ok": True,
+    }, "LONG")
+    assert clean.total >= 7.0
+    assert clean.total > stretched.total
