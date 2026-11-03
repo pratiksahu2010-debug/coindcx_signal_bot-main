@@ -54,14 +54,49 @@ class CoinDCXFuturesStream:
             self._handle_prices(message)
 
     def _handle_prices(self, message: Any) -> None:
-        if self.rest is None or not isinstance(message, dict):
+        """Consume the documented currentPrices@futures#update event safely."""
+        if self.rest is None:
             return
-        payload = message.get("data", message)
-        if not isinstance(payload, dict):
-            return
-        prices = payload.get("prices") or payload.get("data")
-        if isinstance(prices, dict):
-            self.rest.set_ws_prices(prices, payload.get("ts"))
+        payload = message.get("data", message) if isinstance(message, dict) else message
+        if isinstance(payload, dict):
+            prices = payload.get("prices") or payload.get("data")
+            event_ts = payload.get("ts") or payload.get("timestamp")
+            if isinstance(prices, dict):
+                before = len(self.rest._ws_prices)
+                self.rest.set_ws_prices(prices, event_ts)
+                accepted = len(self.rest._ws_prices) - before
+                # Existing pairs can be updated without changing cache size.
+                if not accepted:
+                    accepted = sum(
+                        1 for market, quote in prices.items()
+                        if isinstance(quote, dict)
+                        and (quote.get("ls") or quote.get("last_price") or quote.get("lastPrice"))
+                    )
+                logger.debug(
+                    f"COINDCX_WS_PRICE_EVENT markets={len(prices)} "
+                    f"ltp_updates={accepted} event_ts={'present' if event_ts else 'missing'}"
+                )
+                return
+            if isinstance(prices, list):
+                prices = prices
+            else:
+                return
+        else:
+            prices = payload if isinstance(payload, list) else []
+            event_ts = None
+        normalized = {}
+        for row in prices:
+            if not isinstance(row, dict):
+                continue
+            market = row.get("market") or row.get("pair") or row.get("symbol") or row.get("mkt")
+            if market:
+                normalized[str(market)] = row
+        if normalized:
+            self.rest.set_ws_prices(normalized, event_ts)
+            logger.debug(
+                f"COINDCX_WS_PRICE_EVENT markets={len(normalized)} "
+                f"ltp_updates={sum(bool(v.get('ls') or v.get('last_price') or v.get('lastPrice')) for v in normalized.values())}"
+            )
 
     def _handle_candlestick(self, message: Any) -> None:
         if not isinstance(message, dict):

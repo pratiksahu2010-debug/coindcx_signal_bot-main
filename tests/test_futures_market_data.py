@@ -97,3 +97,71 @@ async def test_active_futures_instruments_accept_wrapped_and_metadata_shapes():
     markets = await client.get_market_details()
     assert [row["pair"] for row in markets] == ["B-SOL_USDT", "B-XRP_USDT"]
     assert markets[1]["status"] == "inactive"
+
+
+@pytest.mark.asyncio
+async def test_futures_price_endpoint_normalizes_list_payload_and_volume(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return [
+            {"market": "B-BTC_USDT", "ls": "65000", "mp": "65100", "ts": now_ms, "v": "12.5"},
+            {"pair": "B-ETH_USDT", "lastPrice": "3000", "timestamp": now_ms, "volume": "20"},
+        ]
+
+    client._get = fake_get
+    rows = await client.get_ticker()
+    assert len(rows) == 2
+    assert rows[0]["last_price"] == "65000"
+    assert rows[0]["base_volume"] == "12.5"
+    assert await client.get_last_price("B-BTC_USDT") == 65000.0
+    assert await client.get_last_price("B-ETH_USDT") == 3000.0
+
+
+@pytest.mark.asyncio
+async def test_futures_price_endpoint_uses_root_timestamp_and_v_volume(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return {"ts": now_ms, "prices": {"B-SOL_USDT": {"ls": "150", "v": "1000"}}}
+
+    client._get = fake_get
+    rows = await client.get_ticker()
+    assert rows[0]["timestamp"] == now_ms
+    assert rows[0]["base_volume"] == "1000"
+    assert await client.get_last_price("B-SOL_USDT") == 150.0
+
+
+@pytest.mark.asyncio
+async def test_futures_price_missing_timestamp_fails_closed(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return {"prices": {"B-BTC_USDT": {"ls": "65000"}}}
+
+    client._get = fake_get
+    assert await client.get_last_price("B-BTC_USDT") is None
+
+
+def test_futures_ws_price_handler_accepts_documented_event_payload(monkeypatch):
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    class CandleStub:
+        def on_candle(self, *args, **kwargs):
+            pass
+
+    rest = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+    stream = CoinDCXFuturesStream(CandleStub(), rest)
+    stream._handle_prices({"data": {
+        "ts": now_ms,
+        "prices": {"B-BTC_USDT": {"ls": "65000", "mp": "65100", "ts": now_ms}}
+    }})
+    assert rest._ws_prices["BTCUSDT"][0] == 65000.0

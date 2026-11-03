@@ -117,8 +117,30 @@ class CoinDCXRest:
             unique.setdefault(item["pair"], item)
         return list(unique.values())
 
+    @staticmethod
+    def _normalize_ticker_row(market: Any, quote: Any, fallback_ts: Any = None) -> Optional[Dict]:
+        """Normalize documented Futures RT rows and list-shaped compatibility payloads."""
+        if not isinstance(quote, dict):
+            return None
+        market_name = market or quote.get("market") or quote.get("pair") or quote.get("symbol") or quote.get("mkt")
+        if not market_name:
+            return None
+        timestamp = quote.get("ts") or quote.get("timestamp") or fallback_ts
+        return {
+            "market": str(market_name),
+            "pair": quote.get("pair") or market_name,
+            "symbol": quote.get("symbol") or quote.get("mkt") or market_name,
+            "last_price": quote.get("ls") or quote.get("last_price") or quote.get("lastPrice"),
+            "mark_price": quote.get("mp") or quote.get("mark_price"),
+            "timestamp": timestamp,
+            # CoinDCX documents v as 24h Futures volume. Keep it as base volume;
+            # SymbolManager converts it to quote turnover using LTP when qv is absent.
+            "quote_volume": quote.get("qv") or quote.get("quote_volume") or quote.get("quoteVolume") or 0,
+            "base_volume": quote.get("v") or quote.get("bv") or quote.get("base_volume") or quote.get("volume") or 0,
+        }
+
     async def get_ticker(self) -> List[Dict]:
-        """Futures current-price snapshot. No Spot ticker fallback is permitted."""
+        """Return normalized Futures current-price rows. Spot data is never used."""
         now = time.monotonic()
         if self._ticker_snapshot is not None and now - self._ticker_snapshot_at <= 1.0:
             return self._ticker_snapshot
@@ -127,22 +149,41 @@ class CoinDCXRest:
             if self._ticker_snapshot is not None and now - self._ticker_snapshot_at <= 1.0:
                 return self._ticker_snapshot
             data = await self._get(f"{self.public}/market_data/v3/current_prices/futures/rt")
+            fallback_ts = data.get("ts") if isinstance(data, dict) else None
             payload = data.get("prices", data.get("data", data)) if isinstance(data, dict) else data
-            rows = []
+            rows: List[Dict] = []
             if isinstance(payload, dict):
                 for market, quote in payload.items():
-                    if not isinstance(quote, dict):
-                        continue
-                    rows.append({
-                        "market": market,
-                        "last_price": quote.get("ls") or quote.get("last_price") or quote.get("lastPrice"),
-                        "mark_price": quote.get("mp"),
-                        "timestamp": quote.get("ts") or quote.get("timestamp") or (data.get("ts") if isinstance(data, dict) else None) or int(time.time() * 1000),
-                        "quote_volume": quote.get("qv") or quote.get("quote_volume") or 0,
-                        "base_volume": quote.get("bv") or quote.get("volume") or 0,
-                    })
+                    normalized = self._normalize_ticker_row(market, quote, fallback_ts)
+                    if normalized:
+                        rows.append(normalized)
             elif isinstance(payload, list):
-                rows = [row for row in payload if isinstance(row, dict)]
+                for quote in payload:
+                    normalized = self._normalize_ticker_row(None, quote, fallback_ts)
+                    if normalized:
+                        rows.append(normalized)
+
+            now_ms = int(time.time() * 1000)
+            valid_ltp = 0
+            ages = []
+            for row in rows:
+                try:
+                    price = float(row.get("last_price") or 0)
+                    ts = int(float(row.get("timestamp") or 0))
+                    if ts < 10**12:
+                        ts *= 1000
+                    if price > 0 and __import__("math").isfinite(price) and ts > 0:
+                        valid_ltp += 1
+                        ages.append((now_ms - ts) / 1000.0)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+            fresh = [age for age in ages if -5 <= age <= 10]
+            logger.info(
+                f"FUTURES_TICKER_SNAPSHOT rows={len(rows)} valid_ltp={valid_ltp} "
+                f"fresh_ltp={len(fresh)} oldest_age_s={max(fresh):.2f}"
+                if fresh else
+                f"FUTURES_TICKER_SNAPSHOT rows={len(rows)} valid_ltp={valid_ltp} fresh_ltp=0"
+            )
             self._ticker_snapshot = rows
             self._ticker_snapshot_at = time.monotonic()
             return rows
@@ -189,24 +230,33 @@ class CoinDCXRest:
         now_ms = int(time.time() * 1000)
         if cached and 0 <= now_ms - cached[1] <= 5000:
             return cached[0]
-        for row in await self.get_ticker():
+        rows = await self.get_ticker()
+        matched = 0
+        stale = 0
+        for row in rows:
             if not isinstance(row, dict):
                 continue
             aliases = (row.get("market"), row.get("pair"), row.get("symbol"))
             if not any(self._market_key(alias) == wanted for alias in aliases if alias):
                 continue
+            matched += 1
             try:
                 ts = int(float(row.get("timestamp") or 0))
                 if ts < 10**12:
                     ts *= 1000
                 age = (now_ms - ts) / 1000.0
                 if ts <= 0 or age < -5 or age > 10:
+                    stale += 1
                     continue
                 price = float(row.get("last_price") or 0)
                 if price > 0 and __import__("math").isfinite(price):
                     return price
             except (TypeError, ValueError, OverflowError):
                 continue
+        logger.warning(
+            f"FUTURES_LTP_UNAVAILABLE pair={pair} ticker_rows={len(rows)} "
+            f"matched={matched} stale={stale}"
+        )
         return None
 
     async def get_candles(
