@@ -17,7 +17,7 @@ def evaluate(candles, atr_value, rvol, min_rvol=1.30, max_extension_atr=0.80):
     try:
         ts = candles["time"]
         op, hi, lo, cl = (candles[k] for k in ("open", "high", "low", "close"))
-        if not ts or not all(len(x) == len(ts) for x in (op, hi, lo, cl)):
+        if len(ts) == 0 or not all(len(x) == len(ts) for x in (op, hi, lo, cl)):
             return {"state": "INVALID_DATA"}
         now = _local(ts[-1])
         if now.time() < RANGE_END:
