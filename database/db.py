@@ -20,6 +20,13 @@ async def init_db() -> None:
     # Import models before create_all so every persistent table is registered.
     from database import models  # noqa: F401
     url = settings.database_url
+    # Render's local filesystem is ephemeral on the current service plan.
+    # Refuse production scans with SQLite so deduplication and retests survive restarts.
+    if settings.is_production and not settings.use_postgres:
+        raise RuntimeError(
+            "Production requires DATABASE_URL pointing to PostgreSQL; "
+            "SQLite is permitted only for local development."
+        )
     if settings.use_postgres:
         # Render commonly supplies postgres:// or postgresql:// URLs; use the
         # asyncpg driver already included in requirements.
