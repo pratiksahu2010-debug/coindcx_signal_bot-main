@@ -42,9 +42,9 @@ async def health(request: Request):
     return {"ok": True, "status": "healthy"}
 
 
-@router.get("/ping", response_class=Response)
+@router.api_route("/ping", methods=["GET", "HEAD"], response_class=Response)
 async def ping() -> Response:
-    """Empty keep-alive response. No scans, exchange calls, Telegram, or DB work."""
+    """Process-liveness only: empty 204 with no scans or external/DB work."""
     return Response(status_code=204)
 
 
