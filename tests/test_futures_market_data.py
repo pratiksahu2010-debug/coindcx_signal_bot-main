@@ -58,3 +58,41 @@ async def test_futures_price_endpoint_normalizes_nested_payload_and_ltp(monkeypa
     assert rows[0]["market"] == "B-BTC_USDT"
     assert rows[0]["last_price"] == "65000"
     assert await client.get_last_price("B-BTC_USDT") == 65000.0
+
+
+@pytest.mark.asyncio
+async def test_active_futures_instruments_string_list_is_normalized(monkeypatch):
+    client = CoinDCXRest()
+
+    async def fake_get(url, params=None):
+        assert url.endswith("/exchange/v1/derivatives/futures/data/active_instruments")
+        assert params == {"margin_currency_short_name[]": "USDT"}
+        return ["B-BTC_USDT", "B-ETH_USDT", "B-BTC_USDT", "B-USDC_USDT", "B-INVALID_INR"]
+
+    client._get = fake_get
+    markets = await client.get_market_details()
+
+    assert [row["pair"] for row in markets] == ["B-BTC_USDT", "B-ETH_USDT", "B-USDC_USDT"]
+    assert markets[0]["target_currency_short_name"] == "BTC"
+    assert markets[0]["base_currency_short_name"] == "USDT"
+    assert all(row["status"] == "active" for row in markets)
+
+
+@pytest.mark.asyncio
+async def test_active_futures_instruments_accept_wrapped_and_metadata_shapes():
+    client = CoinDCXRest()
+    payload = {
+        "data": [
+            {"pair": "B-SOL_USDT", "status": "active", "margin_currency_short_name": "USDT",
+             "target_currency_short_name": "SOL"},
+            {"pair": "B-XRP_USDT", "status": "inactive", "margin_currency_short_name": "USDT"},
+            {"pair": "B-ADA_INR", "status": "active", "margin_currency_short_name": "INR"},
+        ]
+    }
+
+    async def fake_get(url, params=None):
+        return payload
+
+    client._get = fake_get
+    markets = await client.get_market_details()
+    assert [row["pair"] for row in markets] == ["B-SOL_USDT"]
