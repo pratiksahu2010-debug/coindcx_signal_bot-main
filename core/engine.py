@@ -132,8 +132,12 @@ class SignalEngine:
         self.scan_errors = {"normal": 0, "momentum": 0}
         # Independent candle cursors prevent one strategy engine suppressing the other.
         self._last_processed = {"normal": {}, "momentum": {}}
-        # Short-lived, one-shot retest candidates; never restored as active alerts.
+        # Durable one-shot retest candidates, restored after process restarts.
         self.pending_retests: Dict[str, dict] = {}
+        self.pending_retest_checks = 0
+        self.pending_retest_failures = 0
+        self.telegram_delivery_failures = 0
+        self._pending_retest_cursor = 0
 
     def set_telegram(self, tg) -> None:
         self.telegram = tg
@@ -207,6 +211,48 @@ class SignalEngine:
                     )
         logger.info(f"ACTIVE_SIGNALS_RESTORED count={restored}")
         return restored
+
+
+    async def restore_pending_retests(self) -> int:
+        """Restore only unexpired persisted retest candidates."""
+        try:
+            from database.repositories import load_pending_retests
+            records = await load_pending_retests(limit=500)
+            now = utc_now().timestamp()
+            for key, pending in records:
+                if float(pending.get("expires_at", 0)) > now:
+                    self.pending_retests[key] = pending
+            logger.info(f"PENDING_RETESTS_RESTORED count={len(self.pending_retests)}")
+            return len(self.pending_retests)
+        except Exception as exc:
+            logger.error(f"Pending retest restore failed: {exc}")
+            return 0
+
+    async def pending_retest_monitor_loop(self, interval_seconds: float = 2.0) -> None:
+        """Rate-limited fresh-LTP monitor; bounded to five checks per interval."""
+        while self._running:
+            try:
+                all_keys = list(self.pending_retests)
+                if all_keys:
+                    start = self._pending_retest_cursor % len(all_keys)
+                    keys = (all_keys[start:] + all_keys[:start])[:5]
+                    self._pending_retest_cursor = (start + len(keys)) % max(1, len(all_keys))
+                else:
+                    keys = []
+                for key in keys:
+                    pending = self.pending_retests.get(key)
+                    if not pending:
+                        continue
+                    signal = pending.get("signal", {})
+                    await self._check_pending_retest(signal.get("pair", ""), signal.get("engine", ""))
+                    self.pending_retest_checks += 1
+                    await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.pending_retest_failures += 1
+                logger.warning(f"Pending retest monitor cycle failed: {exc}")
+            await asyncio.sleep(max(1.0, min(float(interval_seconds), 10.0)))
 
     async def _wait_for_next_primary_boundary(self) -> None:
         interval_ms = int(parse_interval(settings.candle_primary_tf).total_seconds() * 1000)
@@ -493,9 +539,22 @@ class SignalEngine:
             "rsi_prev": rsi(close[:-1],14),
         }
 
-        # ORB is evaluated on the same completed-candle arrays as Momentum.
-        # Its directional breakout can seed a candidate before MACD fully turns.
-        orb_result = orb_detector.evaluate(arr, atr_v, rvol) if engine == "momentum" else {}
+        # ORB owns a fixed 5-minute Futures feed, independent of the configurable
+        # Momentum primary timeframe. Its opening range is three completed 5m bars.
+        orb_result = {}
+        if engine == "momentum":
+            try:
+                orb_data = await self.rest.get_candles(pair, "5m", limit=PRIMARY_CANDLE_HISTORY)
+                if len(orb_data) >= 25:
+                    orb_arr = {name: np.asarray([row[name] for row in orb_data], dtype=float)
+                               for name in ("open", "high", "low", "close", "volume")}
+                    orb_arr["time"] = np.asarray([row["time"] for row in orb_data], dtype=np.int64)
+                    orb_atr = atr(orb_arr["high"], orb_arr["low"], orb_arr["close"], 14)
+                    orb_avg_volume = float(np.mean(orb_arr["volume"][-21:-1]))
+                    orb_rvol = float(orb_arr["volume"][-1] / orb_avg_volume) if orb_avg_volume > 0 else None
+                    orb_result = orb_detector.evaluate(orb_arr, orb_atr, orb_rvol)
+            except Exception as exc:
+                logger.warning(f"ORB_5M_DATA_UNAVAILABLE {pair}: {exc}")
         indicators["orb_state"] = orb_result.get("state")
         indicators["orb_range_high"] = orb_result.get("range_high")
         indicators["orb_range_low"] = orb_result.get("range_low")
@@ -841,12 +900,20 @@ class SignalEngine:
                 # fresh Futures LTP returns to the original entry band without
                 # touching invalidation; it is never promoted on candle close alone.
                 interval_seconds = parse_interval(primary).total_seconds()
-                self.pending_retests[f"{pair}:{engine}:{direction}"] = {
-                    "signal": signal, "created_at": utc_now(),
+                pending_key = f"{pair}:{engine}:{direction}"
+                pending_record = {
+                    "signal": signal, "created_at": utc_iso(utc_now()),
                     "expires_at": utc_now().timestamp() + min(900, max(180, interval_seconds * 3)),
                     "entry": risk.entry, "zone_low": zone_low, "zone_high": zone_high,
                     "stop_loss": risk.stop_loss, "candle_ts": candle_ts,
                 }
+                self.pending_retests[pending_key] = pending_record
+                try:
+                    from database.repositories import save_pending_retest
+                    if not await save_pending_retest(pending_key, pending_record):
+                        logger.error(f"PENDING_RETEST_PERSIST_FAILED {pending_key}")
+                except Exception as exc:
+                    logger.error(f"PENDING_RETEST_PERSIST_ERROR {pending_key}: {exc}")
                 self._last_processed.setdefault(engine, {})[pair] = candle_ts
                 logger.info(
                     f"ENTRY_RETEST_PENDING {pair} engine={engine} direction={direction} "
@@ -931,16 +998,24 @@ class SignalEngine:
                     persisted_signal = self.signals[engine].get(pair, engine, direction)
                     if persisted_signal:
                         try:
-                            from database.repositories import save_signal
+                            from database.repositories import save_signal, record_signal_outcome
                             if not await save_signal(persisted_signal):
                                 logger.error(f"ACTIVE_SIGNAL_PERSIST_FAILED {pair} engine={engine}")
+                            from database.repositories import record_signal_outcome
+                            await record_signal_outcome(persisted_signal, float(delivery_price), "ACTIVE")
                         except Exception as exc:
                             logger.error(f"ACTIVE_SIGNAL_PERSIST_ERROR {pair}: {exc}")
                 else:
+                    self.telegram_delivery_failures += 1
+                    try:
+                        from database.repositories import release_signal_claim
+                        await release_signal_claim(signal, candle_ts)
+                    except Exception as exc:
+                        logger.error(f"SIGNAL_CLAIM_RELEASE_FAILED {pair}: {exc}")
                     self.signals[engine].invalidate(pair, engine, direction)
                     logger.warning(
                         f"SIGNAL_NOT_DELIVERED {pair} engine={engine} direction={direction}; "
-                        "cooldown_not_set; persistent same-candle claim remains to prevent duplicate retries"
+                        "claim released for a controlled retry"
                     )
         elif disposition == "WATCHLIST":
             self._log_candle_evaluation(
@@ -954,80 +1029,64 @@ class SignalEngine:
             logger.info(f"WATCHLIST {direction} {pair} score={result.total}")
 
     async def _check_pending_retest(self, pair: str, engine: str) -> None:
-        """Promote a pending setup only on a fresh LTP return to its original zone."""
+        """Promote a persisted setup only while fresh LTP is in its original zone."""
         for key, pending in list(self.pending_retests.items()):
-            signal = pending["signal"]
+            signal = pending.get("signal") or {}
             if signal.get("pair") != pair or signal.get("engine") != engine:
                 continue
-            now_ts = utc_now().timestamp()
-            if now_ts >= pending["expires_at"]:
+            async def remove(reason: str) -> None:
                 self.pending_retests.pop(key, None)
-                logger.info(f"RETEST_EXPIRED {key}")
+                try:
+                    from database.repositories import delete_pending_retest
+                    await delete_pending_retest(key)
+                except Exception as exc:
+                    logger.warning(f"PENDING_RETEST_DELETE_FAILED {key}: {exc}")
+                logger.info(f"PENDING_RETEST_REMOVED {key} reason={reason}")
+            if utc_now().timestamp() >= float(pending.get("expires_at", 0)):
+                await remove("expired")
                 continue
             try:
                 live_price = await self.rest.get_last_price(pair)
+                self.pending_retest_checks += 1
             except Exception as exc:
+                self.pending_retest_failures += 1
                 logger.warning(f"RETEST_PRICE_CHECK_FAILED {pair}: {exc}")
                 continue
             if live_price is None:
                 continue
             try:
                 price = float(live_price)
-            except (TypeError, ValueError, OverflowError):
+                direction = signal["direction"]
+                stop = float(pending["stop_loss"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                await remove("invalid_payload")
                 continue
-            direction = signal["direction"]
-            stop = float(pending["stop_loss"])
-            invalidated = price <= stop if direction == "LONG" else price >= stop
-            if invalidated:
-                self.pending_retests.pop(key, None)
-                logger.info(f"RETEST_INVALIDATED {key} live_price={price} stop={stop}")
+            if (price <= stop if direction == "LONG" else price >= stop):
+                await remove("stop_invalidated")
                 continue
-            if classify_entry_state(
-                price, pending["entry"], pending["zone_low"],
-                pending["zone_high"], direction
-            ) != "IMMEDIATE":
+            if classify_entry_state(price, pending["entry"], pending["zone_low"], pending["zone_high"], direction) != "IMMEDIATE":
                 continue
-
-            # A retest promotion is a new alert event, claimed atomically using
-            # the original setup candle so restarts/workers cannot duplicate it.
-            signal = dict(signal)
-            signal["live_price"] = price
-            signal["entry_checked_at"] = utc_iso(utc_now())
-            signal["entry_type"] = "RETEST_CONFIRMED"
-            signal["timestamp"] = utc_iso(utc_now())
-            if not self.signals[engine].add(signal):
-                self.pending_retests.pop(key, None)
-                continue
-            try:
-                from database.repositories import claim_signal_once
-                claimed = await claim_signal_once(
-                    signal, int(pending["candle_ts"]), ttl_hours=4
-                )
-            except Exception as exc:
-                logger.error(f"RETEST_DEDUP_UNAVAILABLE {key}: {exc}")
-                claimed = False
-            if not claimed:
-                self.signals[engine].invalidate(pair, engine, direction)
-                self.pending_retests.pop(key, None)
-                logger.warning(f"RETEST_DUPLICATE_SUPPRESSED {key}")
-                continue
-            # Recheck LTP immediately before delivery to prevent a fast move
-            # from turning a valid pullback into a chased entry.
             try:
                 delivery_price = await self.rest.get_last_price(pair)
             except Exception as exc:
-                delivery_price = None
+                self.pending_retest_failures += 1
                 logger.warning(f"RETEST_DELIVERY_PRICE_FAILED {pair}: {exc}")
-            if delivery_price is None or classify_entry_state(
-                delivery_price, pending["entry"], pending["zone_low"],
-                pending["zone_high"], direction
-            ) != "IMMEDIATE":
-                self.signals[engine].invalidate(pair, engine, direction)
-                self.pending_retests.pop(key, None)
-                logger.info(f"RETEST_MOVED_BEFORE_DELIVERY {key} price={delivery_price}")
                 continue
-            signal["live_price"] = delivery_price
-            signal["entry_checked_at"] = utc_iso(utc_now())
+            if delivery_price is None or classify_entry_state(float(delivery_price), pending["entry"], pending["zone_low"], pending["zone_high"], direction) != "IMMEDIATE":
+                continue
+            signal = dict(signal)
+            signal.update({"live_price": float(delivery_price), "entry_type": "RETEST_CONFIRMED",
+                           "entry_checked_at": utc_iso(utc_now()), "timestamp": utc_iso(utc_now())})
+            try:
+                from database.repositories import claim_signal_once
+                claimed = await claim_signal_once(signal, int(pending["candle_ts"]), ttl_hours=4)
+            except Exception as exc:
+                self.pending_retest_failures += 1
+                logger.error(f"RETEST_DEDUP_ERROR {key}: {exc}")
+                continue
+            if not claimed:
+                await remove("duplicate")
+                continue
             delivered = False
             if self.telegram:
                 try:
@@ -1035,21 +1094,23 @@ class SignalEngine:
                 except Exception as exc:
                     logger.error(f"RETEST_TELEGRAM_ERROR {key}: {exc}")
             if delivered:
-                self.cooldowns[engine].set(pair, engine, direction)
-                persisted = self.signals[engine].get(pair, engine, direction)
-                if persisted:
-                    persisted.update(signal)
-                    try:
-                        from database.repositories import save_signal
-                        if not await save_signal(persisted):
-                            logger.error(f"RETEST_SIGNAL_PERSIST_FAILED {key}")
-                    except Exception as exc:
-                        logger.error(f"RETEST_SIGNAL_PERSIST_ERROR {key}: {exc}")
+                if self.signals[engine].add(signal):
+                    self.cooldowns[engine].set(pair, engine, direction)
+                    from database.repositories import save_signal, record_signal_outcome
+                    active = self.signals[engine].get(pair, engine, direction) or signal
+                    await save_signal(active)
+                    await record_signal_outcome(signal, float(delivery_price), "ACTIVE")
                 logger.info(f"RETEST_SIGNAL_DELIVERED {key} price={delivery_price}")
             else:
-                self.signals[engine].invalidate(pair, engine, direction)
-                logger.warning(f"RETEST_SIGNAL_NOT_DELIVERED {key}")
-            self.pending_retests.pop(key, None)
+                self.telegram_delivery_failures += 1
+                try:
+                    from database.repositories import release_signal_claim
+                    await release_signal_claim(signal, int(pending["candle_ts"]))
+                except Exception as exc:
+                    logger.error(f"RETEST_CLAIM_RELEASE_FAILED {key}: {exc}")
+                logger.warning(f"RETEST_SIGNAL_NOT_DELIVERED {key}; candidate remains retryable")
+                continue
+            await remove("delivered")
 
     def _log_candle_evaluation(
         self, pair: str, engine: str, direction: str, candle_ts: int,
@@ -1098,11 +1159,19 @@ class SignalEngine:
             if sl is None or t1 is None:
                 continue
             sl_hit = low <= sl if direction == "LONG" else high >= sl
+            try:
+                from database.repositories import record_signal_outcome
+                await record_signal_outcome(sig, high, "ACTIVE")
+                await record_signal_outcome(sig, low, "ACTIVE")
+            except Exception as exc:
+                logger.warning(f"Outcome metrics update failed for {pair}: {exc}")
             if sl_hit:
                 if self.signals[engine].mark_sl(pair, engine, direction):
                     try:
-                        from database.repositories import update_signal_record
+                        from database.repositories import update_signal_record, record_signal_outcome
                         await update_signal_record(sig, "closed_sl")
+                        final_outcome = "FAILED_BREAKOUT" if str(sig.get("strategy", "")).startswith("ORB") else "STOP"
+                        await record_signal_outcome(sig, float(sl), final_outcome)
                     except Exception as exc:
                         logger.error(f"Persist SL outcome failed for {pair}: {exc}")
                 continue
@@ -1118,8 +1187,10 @@ class SignalEngine:
                 current = self.signals[engine].get(pair, engine, direction) or sig
                 status = current.get("status", "active")
                 try:
-                    from database.repositories import update_signal_record
+                    from database.repositories import update_signal_record, record_signal_outcome
                     await update_signal_record(current, status)
+                    if 1 in hits:
+                        await record_signal_outcome(current, float(t1), "TP1")
                 except Exception as exc:
                     logger.error(f"Persist TP outcome failed for {pair}: {exc}")
 

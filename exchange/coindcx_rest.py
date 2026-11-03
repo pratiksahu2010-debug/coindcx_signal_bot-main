@@ -23,6 +23,10 @@ class CoinDCXRest:
         self._ws_prices: Dict[str, tuple] = {}
         # pair -> timeframe -> consecutive stale API observations
         self._stale_market_timeframes: Dict[str, Dict[str, int]] = {}
+        self.request_count = 0
+        self.request_failures = 0
+        self.candle_cache_hits = 0
+        self.last_successful_request_at = None
 
     async def start(self) -> None:
         if self._client is None:
@@ -40,9 +44,16 @@ class CoinDCXRest:
     async def _get(self, url: str, params: Optional[Dict] = None) -> Any:
         async with self._semaphore:
             assert self._client is not None
-            resp = await self._client.get(url, params=params)
-            resp.raise_for_status()
-            return resp.json()
+            self.request_count += 1
+            try:
+                resp = await self._client.get(url, params=params)
+                resp.raise_for_status()
+                payload = resp.json()
+                self.last_successful_request_at = time.time()
+                return payload
+            except Exception:
+                self.request_failures += 1
+                raise
 
     async def get_markets(self) -> List[str]:
         """Return Futures instrument names only."""
@@ -212,7 +223,8 @@ class CoinDCXRest:
             raise ValueError(f"Unsupported CoinDCX Futures candle interval: {interval}")
         cache_key = (pair, interval, limit, start_time, end_time)
         cached = self._candle_cache.get(cache_key)
-        if cached and time.monotonic() - cached[0] < 2:
+        if cached and time.monotonic() - cached[0] < 5:
+            self.candle_cache_hits += 1
             return [dict(x) for x in cached[1]]
         now_ms = int(time.time() * 1000)
         end_ms = int(end_time or now_ms)
@@ -268,5 +280,12 @@ class CoinDCXRest:
             else:
                 self._stale_market_timeframes.get(pair, {}).pop(interval, None)
         self._candle_cache[cache_key] = (time.monotonic(), [dict(x) for x in candles])
+        # Bound memory when many symbols/time windows are scanned.
+        if len(self._candle_cache) > 1000:
+            cutoff = time.monotonic() - 15
+            self._candle_cache = {k: v for k, v in self._candle_cache.items() if v[0] >= cutoff}
+            if len(self._candle_cache) > 1000:
+                for old_key in list(self._candle_cache)[:len(self._candle_cache) - 1000]:
+                    self._candle_cache.pop(old_key, None)
         return candles
 

@@ -94,6 +94,13 @@ async def metrics(request: Request) -> Dict[str, Any]:
         "scan_errors_normal": app_state.get("scan_errors_normal", 0),
         "scan_errors_momentum": app_state.get("scan_errors_momentum", 0),
         "websocket_reconnects": app_state.get("ws_reconnects", 0),
+        "futures_rest_requests": getattr(getattr(request.app.state, "rest", None), "request_count", 0),
+        "futures_rest_failures": getattr(getattr(request.app.state, "rest", None), "request_failures", 0),
+        "candle_cache_hits": getattr(getattr(request.app.state, "rest", None), "candle_cache_hits", 0),
+        "pending_retests": len(getattr(getattr(request.app.state, "engine", None), "pending_retests", {})),
+        "pending_retest_checks": getattr(getattr(request.app.state, "engine", None), "pending_retest_checks", 0),
+        "pending_retest_failures": getattr(getattr(request.app.state, "engine", None), "pending_retest_failures", 0),
+        "telegram_delivery_failures": getattr(getattr(request.app.state, "engine", None), "telegram_delivery_failures", 0),
         "memory_mb": mem["memory_mb"],
         "timestamp": utc_iso(),
     }
