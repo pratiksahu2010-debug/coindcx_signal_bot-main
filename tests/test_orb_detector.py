@@ -51,3 +51,20 @@ def test_orb_session_expires_after_india_cash_session():
     candles = base_candles((15, 30), 102.0, 100.8, 101.8)
     result = evaluate(candles, 1.5, 2.0)
     assert result["state"] == "SESSION_CLOSED"
+
+def test_orb_detects_retest_after_initial_breakout():
+    candles = base_candles((9, 30), 102.0, 100.8, 101.8)
+    candles["time"].append(ts(9, 35))
+    candles["open"].append(101.7)
+    candles["high"].append(102.0)
+    candles["low"].append(101.1)
+    candles["close"].append(101.7)
+    result = evaluate(candles, 1.5, 1.8)
+    assert result["state"] == "ORB_RETEST"
+    assert result["direction"] == "LONG"
+
+
+def test_orb_rejects_unusually_wide_opening_range():
+    candles = base_candles((9, 30), 104.0, 100.8, 103.8)
+    result = evaluate(candles, 1.0, 2.0)
+    assert result["state"] == "UNTRADEABLE_RANGE"
