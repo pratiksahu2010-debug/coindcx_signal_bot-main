@@ -490,6 +490,15 @@ class SignalEngine:
             "rsi_prev": rsi(close[:-1],14),
         }
 
+        # ORB is evaluated on the same completed-candle arrays as Momentum.
+        # Its directional breakout can seed a candidate before MACD fully turns.
+        orb_result = orb_detector.evaluate(arr, atr_v, rvol) if engine == "momentum" else {}
+        indicators["orb_state"] = orb_result.get("state")
+        indicators["orb_range_high"] = orb_result.get("range_high")
+        indicators["orb_range_low"] = orb_result.get("range_low")
+        indicators["orb_breakout_level"] = orb_result.get("breakout_level")
+        indicators["orb_breakout_extension_atr"] = orb_result.get("breakout_extension_atr")
+
         # Determine direction from EMA9/EMA21 only. VWAP is evaluated as its
         # own mandatory gate below; candle direction/body is not a gate.
         direction = None
@@ -505,9 +514,11 @@ class SignalEngine:
             # retained as quality evidence, never the initial direction gate.
             short_roc = ((float(close[-1]) / float(close[-4]) - 1.0) * 100.0
                          if len(close) >= 4 and float(close[-4]) > 0 else 0.0)
-            if macd_hist is not None and macd_hist > 0 and short_roc > 0:
+            if orb_result.get("state") in ("ORB_BREAKOUT", "ORB_RETEST"):
+                direction = orb_result.get("direction")
+            elif short_roc > 0 and (macd_hist is None or macd_hist >= 0):
                 direction = "LONG"
-            elif macd_hist is not None and macd_hist < 0 and short_roc < 0:
+            elif short_roc < 0 and (macd_hist is None or macd_hist <= 0):
                 direction = "SHORT"
 
         if not direction:
@@ -642,15 +653,9 @@ class SignalEngine:
             # Evaluate the dedicated IST ORB on the same active Momentum universe.
             # ORB has its own range/volume/extension rules and shares only the
             # common risk, freshness, deduplication and delivery pipeline.
-            orb_result = orb_detector.evaluate(arr, atr_v, rvol)
-            indicators["orb_state"] = orb_result.get("state")
-            indicators["orb_range_high"] = orb_result.get("range_high")
-            indicators["orb_range_low"] = orb_result.get("range_low")
-            indicators["orb_breakout_level"] = orb_result.get("breakout_level")
-            indicators["orb_breakout_extension_atr"] = orb_result.get("breakout_extension_atr")
             # Momentum must be a directional expansion, not merely a high score.
             momentum_state = (
-                "ORB_BREAKOUT" if orb_result.get("state") == "ORB_BREAKOUT"
+                orb_result.get("state") if orb_result.get("state") in ("ORB_BREAKOUT", "ORB_RETEST")
                 and orb_result.get("direction") == direction
                 else detect_momentum_state(indicators)
             )
@@ -672,10 +677,10 @@ class SignalEngine:
                 })
                 return
             valid_momentum_state = momentum_state in (
-                "EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION", "ORB_BREAKOUT"
+                "EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION", "ORB_BREAKOUT", "ORB_RETEST"
             )
             breakout_extension = indicators.get("orb_breakout_extension_atr")
-            if momentum_state == "ORB_BREAKOUT":
+            if momentum_state in ("ORB_BREAKOUT", "ORB_RETEST"):
                 momentum_entry_actionable = (
                     breakout_extension is not None and breakout_extension <= 0.80
                     and extension <= 2.00
@@ -693,7 +698,7 @@ class SignalEngine:
                 )
             momentum_gates = {
                 "momentum_state": valid_momentum_state,
-                "macd_direction": bool(indicators["macd_direction_ok"]),
+                "macd_direction": bool(indicators["macd_direction_ok"] or momentum_state in ("ORB_BREAKOUT", "ORB_RETEST")),
                 # A 15m close, DI cross and large candle body can lag the move.
                 # A structure break no longer bypasses extension protection.
                 "anti_chase_and_breakout_extension": bool(momentum_entry_actionable),
