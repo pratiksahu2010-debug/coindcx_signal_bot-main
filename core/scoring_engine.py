@@ -111,23 +111,19 @@ class ScoringEngine:
                 expl = f"ADX {adx_v:.1f} weak"
         comps.append(ScoreComponent("ADX", pts, w["adx"], adx_v, direction, expl, pts > 0))
 
-        # RSI
+        # RSI(14) directional threshold matches the Normal Engine gate.
+        # Strong readings above 70 / below 30 remain valid momentum readings;
+        # they are not automatically rejected as overbought/oversold.
         rsi_v = indicators.get("rsi")
         pts = 0.0
         expl = "N/A"
         if rsi_v is not None:
-            if is_long and 45 <= rsi_v <= 70:
+            aligned = (rsi_v > 50.0) if is_long else (rsi_v < 50.0)
+            if aligned:
                 pts = w["rsi"]
-                expl = f"RSI {rsi_v:.1f} bullish zone"
-            elif not is_long and 30 <= rsi_v <= 55:
-                pts = w["rsi"]
-                expl = f"RSI {rsi_v:.1f} bearish zone"
-            elif is_long and rsi_v > 70:
-                expl = f"RSI {rsi_v:.1f} overbought"
-            elif not is_long and rsi_v < 30:
-                expl = f"RSI {rsi_v:.1f} oversold"
+                expl = f"RSI {rsi_v:.1f} {'bullish' if is_long else 'bearish'} (>50 / <50)"
             else:
-                expl = f"RSI {rsi_v:.1f}"
+                expl = f"RSI {rsi_v:.1f} against direction"
         comps.append(ScoreComponent("RSI", pts, w["rsi"], rsi_v, direction, expl, pts > 0))
 
         # MACD

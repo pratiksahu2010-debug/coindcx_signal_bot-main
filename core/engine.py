@@ -15,7 +15,7 @@ from core.scoring_engine import ScoringEngine
 from core.cooldown_manager import CooldownManager
 from core.watchlist_manager import WatchlistManager
 from core.signal_manager import SignalManager
-from core.risk_calculator import calculate_risk, is_entry_price_actionable
+from core.risk_calculator import calculate_risk, is_entry_price_actionable, classify_entry_state
 from strategies.normal.strategy_manager import detect_strategy
 from strategies.momentum.strategy_manager import detect_momentum_state
 from indicators import (
@@ -31,12 +31,41 @@ CONFIRM_CANDLE_HISTORY = 120
 
 
 def _score_disposition(score: float, signal_threshold: float) -> str:
-    """Classify scores without allowing watchlist scores to become alerts."""
+    """Classify momentum scores without allowing watchlist scores to become alerts."""
     if score >= max(7.0, signal_threshold):
         return "SIGNAL"
-    if score >= 6.0:
+    if score >= 5.5:
         return "WATCHLIST"
     return "REJECT"
+
+
+def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min: float) -> Dict[str, bool]:
+    """The six explicit Normal Engine approval conditions; no candle-shape gate."""
+    is_long = direction == "LONG"
+    ema9, ema21 = indicators.get("ema9"), indicators.get("ema21")
+    price, vwap_value = indicators.get("close"), indicators.get("vwap")
+    macd_hist, rsi_value = indicators.get("macd_hist"), indicators.get("rsi")
+    adx_value = indicators.get("adx")
+    return {
+        "ema_alignment": (
+            ema9 is not None and ema21 is not None
+            and ((ema9 > ema21) if is_long else (ema9 < ema21))
+        ),
+        "price_vwap": (
+            price is not None and vwap_value is not None
+            and ((price > vwap_value) if is_long else (price < vwap_value))
+        ),
+        "adx_min": adx_value is not None and adx_value >= adx_min,
+        "context_15m": bool(indicators.get("confirm_15m")),
+        "macd_direction": (
+            macd_hist is not None
+            and ((macd_hist > 0) if is_long else (macd_hist < 0))
+        ),
+        "rsi_direction": (
+            rsi_value is not None
+            and ((rsi_value > 50.0) if is_long else (rsi_value < 50.0))
+        ),
+    }
 
 
 def _macd_hist_history(closes: Any, points: int = 4) -> List[float]:
@@ -105,6 +134,46 @@ class SignalEngine:
 
     def set_telegram(self, tg) -> None:
         self.telegram = tg
+
+    def on_intrabar_candle(self, pair: str, timeframe: str, candle: Dict[str, Any]) -> None:
+        """Record early forming-candle momentum as watchlist context only.
+
+        Intrabar candidates are never Telegram signals. The normal closed-candle
+        REST scan must independently confirm the final Momentum setup.
+        """
+        if timeframe != settings.candle_primary_tf:
+            return
+        arr = self.candles.get_arrays(pair, timeframe)
+        if not arr or len(arr.get("close", [])) < 25:
+            return
+        try:
+            close = np.asarray(arr["close"], dtype=float)
+            volume = np.asarray(arr["volume"], dtype=float)
+            opens = float(candle["open"])
+            live_close = float(candle["close"])
+            avg_volume = float(np.mean(volume[-21:-1]))
+            if avg_volume <= 0 or live_close <= 0:
+                return
+            rvol_live = float(volume[-1]) / avg_volume
+            short_roc = (live_close / float(close[-4]) - 1.0) * 100.0
+            if rvol_live < 1.2 or abs(short_roc) < 0.08:
+                return
+            direction = "LONG" if live_close > opens and short_roc > 0 else (
+                "SHORT" if live_close < opens and short_roc < 0 else None
+            )
+            if direction is None:
+                return
+            self.watchlists["momentum"].add({
+                "pair": pair, "display": self.symbols.display_name(pair),
+                "direction": direction, "engine": "momentum",
+                "strategy": "INTRABAR_PRESETUP", "score": 5.5,
+                "grade": "WATCHLIST", "price": live_close,
+                "indicators": {"live_rvol": round(rvol_live, 3),
+                               "live_roc": round(short_roc, 4)},
+                "timestamp": utc_iso(utc_now()),
+            })
+        except (KeyError, TypeError, ValueError, ZeroDivisionError, FloatingPointError):
+            return
 
     async def restore_active_signals(self) -> int:
         """Rehydrate active signal lifecycle state from the configured database."""
@@ -350,7 +419,7 @@ class SignalEngine:
         confirm_long = confirm_short = False
         confirm_candle_time_ms = None
         conf_data = await self.rest.get_candles(pair, settings.candle_confirm_tf, limit=CONFIRM_CANDLE_HISTORY)
-        if conf_data and len(conf_data) >= 55:
+        if conf_data and len(conf_data) >= 21:
             self.candles.seed(pair, settings.candle_confirm_tf, conf_data)
             c_arr = self.candles.get_arrays(pair, settings.candle_confirm_tf)
             c_close = np.asarray(c_arr.get("close", []), dtype=float)
@@ -375,19 +444,13 @@ class SignalEngine:
                 c_low = c_low[:0]
                 c_vol = c_vol[:0]
                 c_times = c_times[:0]
-            c_ema9, c_ema21, c_ema50 = ema(c_close, 9), ema(c_close, 21), ema(c_close, 50)
+            c_ema9, c_ema21 = ema(c_close, 9), ema(c_close, 21)
             confirm_candle_time_ms = int(c_times[-1]) if c_times.size else None
-            c_day_start = (int(c_times[-1]) // 86_400_000) * 86_400_000 if len(c_times) else 0
-            c_day_idx = int(np.searchsorted(c_times, c_day_start, side="left")) if len(c_times) else 0
-            c_vwap = (
-                vwap(c_high[c_day_idx:], c_low[c_day_idx:], c_close[c_day_idx:], c_vol[c_day_idx:], period=None)
-                if c_close.size > 0 and c_high.size == c_close.size
-                and c_low.size == c_close.size and c_vol.size == c_close.size
-                else None
-            )
-            if all(v is not None for v in (c_ema9, c_ema21, c_ema50, c_vwap)) and c_close.size >= 2:
-                confirm_long = c_ema9 > c_ema21 > c_ema50 and c_close[-1] > c_vwap and c_ema9 > ema(c_close[:-1],9)
-                confirm_short = c_ema9 < c_ema21 < c_ema50 and c_close[-1] < c_vwap and c_ema9 < ema(c_close[:-1],9)
+            # Keep the higher-timeframe context deliberately simple: 15m EMA9/21
+            # direction only. No EMA50, VWAP, or slope requirement is added.
+            if c_ema9 is not None and c_ema21 is not None:
+                confirm_long = c_ema9 > c_ema21
+                confirm_short = c_ema9 < c_ema21
 
         # Market structure: last close must break the prior confirmed swing.
         structure_ok = False
@@ -426,12 +489,24 @@ class SignalEngine:
             "rsi_prev": rsi(close[:-1],14),
         }
 
-        # Determine direction
+        # Determine direction from EMA9/EMA21 only. VWAP is evaluated as its
+        # own mandatory gate below; candle direction/body is not a gate.
         direction = None
-        if ema9 is not None and ema21 is not None and vwap_v is not None:
-            if ema9 > ema21 and close[-1] > vwap_v and signed_body > 0:
+        if engine == "normal":
+            if ema9 is not None and ema21 is not None:
+                if ema9 > ema21:
+                    direction = "LONG"
+                elif ema9 < ema21:
+                    direction = "SHORT"
+        else:
+            # Momentum may lead the EMA crossover: use short ROC + MACD sign
+            # as an independent early directional candidate. EMA alignment is
+            # retained as quality evidence, never the initial direction gate.
+            short_roc = ((float(close[-1]) / float(close[-4]) - 1.0) * 100.0
+                         if len(close) >= 4 and float(close[-4]) > 0 else 0.0)
+            if macd_hist is not None and macd_hist > 0 and short_roc > 0:
                 direction = "LONG"
-            elif ema9 < ema21 and close[-1] < vwap_v and signed_body < 0:
+            elif macd_hist is not None and macd_hist < 0 and short_roc < 0:
                 direction = "SHORT"
 
         if not direction:
@@ -447,6 +522,12 @@ class SignalEngine:
             macd_hist is not None and (
                 (direction == "LONG" and macd_hist > 0) or
                 (direction == "SHORT" and macd_hist < 0)
+            )
+        )
+        indicators["rsi_direction_ok"] = bool(
+            rsi_v is not None and (
+                (direction == "LONG" and rsi_v > 50.0) or
+                (direction == "SHORT" and rsi_v < 50.0)
             )
         )
         indicators["confirm_15m"] = confirm_long if direction == "LONG" else confirm_short
@@ -465,19 +546,12 @@ class SignalEngine:
             (direction == "SHORT" and close_location <= 0.35 and signed_body < 0))
 
         if engine == "normal":
-            # Evaluate strategy and every hard gate before returning so a missed
-            # early setup can be reconstructed from one candle-level diagnostic.
+            # Exactly six mandatory Normal Engine conditions. Strategy labels,
+            # candle shape, DI, ADX slope, EMA50 and extra 15m filters are not gates.
             strategy = detect_strategy(indicators, direction)
-            gates = {
-                "adx_min": adx_v is not None and adx_v >= settings.normal_adx_min,
-                "confirm_15m": bool(indicators["confirm_15m"]),
-                "di_direction": bool(indicators["di_direction_ok"]),
-                "macd_direction": bool(indicators["macd_direction_ok"]),
-                "adx_rising_or_30": bool(indicators["adx_rising"] or (adx_v is not None and adx_v >= 30)),
-                "not_chasing": bool(indicators["not_chasing"]),
-                "directional_candle": bool(indicators["directional_candle"]),
-                "strategy_classified": strategy != "UNCLASSIFIED",
-            }
+            if strategy == "UNCLASSIFIED":
+                strategy = "EMA_VWAP_TREND"
+            gates = _normal_threshold_gates(indicators, direction, settings.normal_adx_min)
             failed = [name for name, passed in gates.items() if not passed]
             if failed:
                 self._log_candle_evaluation(
@@ -486,10 +560,19 @@ class SignalEngine:
                     strategy=strategy,
                 )
                 return
+            # Keep anti-chasing as a separate entry-safety rule, not a seventh
+            # indicator threshold.
+            if not indicators["not_chasing"]:
+                self._log_candle_evaluation(
+                    pair, engine, direction, candle_ts, candle_close_ms,
+                    confirm_candle_time_ms, indicators, "REJECT",
+                    failed=["anti_chasing"], strategy=strategy,
+                )
+                return
             result = self.normal_scoring.score_normal(indicators, direction)
         else:
             # Momentum engine uses its own configured minimum trend-strength gate.
-            if adx_v is None or adx_v < settings.momentum_adx_explosion:
+            if adx_v is None or adx_v < max(12.0, settings.momentum_adx_explosion * 0.70):
                 self._log_candle_evaluation(
                     pair, engine, direction, candle_ts, candle_close_ms,
                     confirm_candle_time_ms, indicators, "REJECT",
@@ -500,6 +583,7 @@ class SignalEngine:
             bb = bollinger_bands(close, 20, 2.0)
             kc = keltner_channels(high, low, close, 20, 1.5)
             squeeze_release = False
+            compression_active = False
             bw_expand = False
             bw_now = bw_prev = None
             if bb is not None and kc is not None and len(close) >= 22:
@@ -511,11 +595,23 @@ class SignalEngine:
                 if prev_bb is not None and prev_kc is not None:
                     p_upper,p_mid,p_lower=prev_bb
                     p_kupper,_,p_klower=prev_kc
-                    was_squeezed = p_upper < p_kupper and p_lower > p_klower
+                    # Compression is a rolling state, not a one-candle event.
+                    recent_compression = False
+                    for back in range(1, min(7, len(close) - 20)):
+                        hist_bb = bollinger_bands(close[:-back], 20, 2.0)
+                        hist_kc = keltner_channels(high[:-back], low[:-back], close[:-back], 20, 1.5)
+                        if hist_bb is None or hist_kc is None:
+                            continue
+                        hu, _, hl = hist_bb
+                        hku, _, hkl = hist_kc
+                        if hu < hku and hl > hkl:
+                            recent_compression = True
+                            break
                     now_released = upper_bb > upper_kc or lower_bb < lower_kc
-                    squeeze_release = was_squeezed and now_released
+                    compression_active = recent_compression and not now_released
+                    squeeze_release = recent_compression and now_released
                     bw_prev = bandwidth(p_upper,p_lower,p_mid)
-                    bw_expand = bw_now is not None and bw_prev is not None and bw_now > bw_prev * 1.08
+                    bw_expand = bw_now is not None and bw_prev is not None and bw_now > bw_prev * 1.03
             atr_series = [atr(high[:i+1],low[:i+1],close[:i+1],14) for i in range(max(14,len(close)-8),len(close))]
             valid_atr = [x for x in atr_series if x is not None]
             atr_expansion = (valid_atr[-1]/np.mean(valid_atr[:-1])) if len(valid_atr)>=3 and np.mean(valid_atr[:-1])>0 else 1.0
@@ -533,6 +629,7 @@ class SignalEngine:
             rsi_accel = len(valid_rsi)>=3 and ((valid_rsi[-1]>valid_rsi[-2]>valid_rsi[-3]) if direction=="LONG" else (valid_rsi[-1]<valid_rsi[-2]<valid_rsi[-3]))
             roc_v = roc(close,10)
             indicators["squeeze_release"] = squeeze_release
+            indicators["compression_active"] = compression_active
             indicators["bw_expand"] = bw_expand
             indicators["atr_expansion"] = float(atr_expansion)
             indicators["ema_aligned"] = bool(ema9 is not None and ema21 is not None and ema50 is not None and
@@ -548,13 +645,29 @@ class SignalEngine:
             indicators["structure_direction_ok"] = indicators["structure_break"]
             # Momentum must be a directional expansion, not merely a high score.
             momentum_state = detect_momentum_state(indicators)
+            if momentum_state == "PRE_EXPLOSION":
+                # Compression + early participation is a watch state only.
+                # It must never generate a Telegram trade alert before release.
+                self._log_candle_evaluation(
+                    pair, engine, direction, candle_ts, candle_close_ms,
+                    confirm_candle_time_ms, indicators, "WATCHLIST",
+                    failed=["awaiting_volatility_release"], strategy=momentum_state,
+                )
+                self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                self.watchlists[engine].add({
+                    "pair": pair, "display": self.symbols.display_name(pair),
+                    "direction": direction, "engine": engine,
+                    "strategy": momentum_state, "score": 0.0,
+                    "grade": "WATCHLIST", "price": float(close[-1]),
+                    "timestamp": utc_iso(utc_now()),
+                })
+                return
             valid_momentum_state = momentum_state in ("EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION")
             momentum_gates = {
                 "momentum_state": valid_momentum_state,
-                "confirm_15m": bool(indicators["confirm_15m"]),
                 "macd_direction": bool(indicators["macd_direction_ok"]),
-                "di_direction": bool(indicators["di_direction_ok"]),
-                "directional_candle": bool(indicators["directional_candle"]),
+                # A 15m close, DI cross and large candle body can lag the move.
+                # Keep higher-timeframe context and candle shape as diagnostics.
                 "not_chasing_or_structure_break": bool(indicators["not_chasing"] or indicators["structure_break"]),
             }
             failed = [name for name, passed in momentum_gates.items() if not passed]
@@ -568,14 +681,20 @@ class SignalEngine:
             result = self.momentum_scoring.score_momentum(indicators, direction)
             strategy = momentum_state
 
+        # A Normal candidate has already passed all six mandatory gates.
+        # Do not label it WATCHLIST/NONE merely because optional score components
+        # (RVOL, ATR, candle quality, structure) contribute fewer points.
+        if engine == "normal" and result.grade in ("NONE", "WATCHLIST"):
+            result.grade = "SIGNAL"
+
         score_parts = ",".join(
             f"{c.name}:{c.points:g}/{c.max_points:g}" for c in result.components
         )
-        if result.total < 6.0:
+        if engine == "momentum" and result.total < 5.5:
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
                 confirm_candle_time_ms, indicators, "REJECT",
-                failed=[f"score_below_watchlist_min({result.total:.2f})"], strategy=strategy,
+                failed=[f"score_below_watchlist_min_5_5({result.total:.2f})"], strategy=strategy,
                 score=result.total, score_parts=score_parts,
             )
             return
@@ -633,7 +752,12 @@ class SignalEngine:
                 "invalidation": risk.invalidation,
             }
 
-        disposition = _score_disposition(result.total, settings.signal_threshold)
+        # Normal signals are qualified by the six explicit gates plus separate
+        # risk/entry safety checks. Scoring is informational, not a hidden gate.
+        disposition = (
+            "SIGNAL" if engine == "normal"
+            else _score_disposition(result.total, settings.signal_threshold)
+        )
         if disposition == "SIGNAL":
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
@@ -660,11 +784,16 @@ class SignalEngine:
                 self._last_processed.setdefault(engine, {})[pair] = candle_ts
                 return
             zone_low, zone_high = risk.entry_zone_low, risk.entry_zone_high
-            if live_price is None or not is_entry_price_actionable(live_price, zone_low, zone_high):
+            entry_state = (
+                classify_entry_state(live_price, risk.entry, zone_low, zone_high, direction)
+                if live_price is not None else "EXPIRED"
+            )
+            if entry_state != "IMMEDIATE":
                 self._last_processed.setdefault(engine, {})[pair] = candle_ts
                 logger.info(
-                    f"ENTRY_MOVED_SKIP {pair} engine={engine} direction={direction} "
-                    f"live_price={live_price} entry_zone={zone_low}-{zone_high}"
+                    f"ENTRY_{entry_state}_SKIP {pair} engine={engine} direction={direction} "
+                    f"live_price={live_price} entry_zone={zone_low}-{zone_high}; "
+                    "candidate must be re-evaluated on a fresh candle"
                 )
                 return
             # Recheck freshness after the extra ticker request.
@@ -702,7 +831,7 @@ class SignalEngine:
                     delivery_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
                     if (
                         delivery_price is None
-                        or not is_entry_price_actionable(delivery_price, zone_low, zone_high)
+                        or classify_entry_state(delivery_price, risk.entry, zone_low, zone_high, direction) != "IMMEDIATE"
                         or delivery_age < 0
                         or delivery_age > settings.max_signal_age_seconds
                     ):

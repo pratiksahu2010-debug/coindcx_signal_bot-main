@@ -42,3 +42,64 @@ def test_normal_score_low_adx():
     }
     result = engine.score_normal(indicators, "LONG")
     assert result.total < 6.0
+
+
+def test_normal_six_condition_gate_long_and_short():
+    from core.engine import _normal_threshold_gates
+
+    long_indicators = {
+        "ema9": 101.0, "ema21": 100.0,
+        "close": 102.0, "vwap": 101.0,
+        "adx": 25.0, "confirm_15m": True,
+        "macd_hist": 0.01, "rsi": 50.1,
+        # Candle shape is intentionally absent; it is not a gate.
+    }
+    assert all(_normal_threshold_gates(long_indicators, "LONG", 25.0).values())
+
+    short_indicators = {
+        "ema9": 99.0, "ema21": 100.0,
+        "close": 98.0, "vwap": 99.0,
+        "adx": 25.0, "confirm_15m": True,
+        "macd_hist": -0.01, "rsi": 49.9,
+    }
+    assert all(_normal_threshold_gates(short_indicators, "SHORT", 25.0).values())
+
+
+def test_normal_six_condition_gate_rejects_each_missing_confirmation():
+    from core.engine import _normal_threshold_gates
+
+    base = {
+        "ema9": 101.0, "ema21": 100.0,
+        "close": 102.0, "vwap": 101.0,
+        "adx": 25.0, "confirm_15m": True,
+        "macd_hist": 0.01, "rsi": 55.0,
+    }
+    assert all(_normal_threshold_gates(base, "LONG", 25.0).values())
+
+    for key, value in (
+        ("ema9", 99.0),
+        ("close", 100.0),
+        ("adx", 24.99),
+        ("confirm_15m", False),
+        ("macd_hist", 0.0),
+        ("rsi", 50.0),
+    ):
+        changed = dict(base)
+        changed[key] = value
+        gates = _normal_threshold_gates(changed, "LONG", 25.0)
+        assert not all(gates.values()), key
+        assert [name for name, passed in gates.items() if not passed]
+
+
+def test_normal_rsi_scoring_does_not_penalize_strong_directional_momentum():
+    engine = ScoringEngine()
+    long_result = engine.score_normal({
+        "close": 102, "ema9": 101, "ema21": 100, "vwap": 101,
+        "adx": 30, "rsi": 76, "macd_hist": 1,
+    }, "LONG")
+    short_result = engine.score_normal({
+        "close": 98, "ema9": 99, "ema21": 100, "vwap": 99,
+        "adx": 30, "rsi": 24, "macd_hist": -1,
+    }, "SHORT")
+    assert next(c for c in long_result.components if c.name == "RSI").points == 1.0
+    assert next(c for c in short_result.components if c.name == "RSI").points == 1.0
