@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo\nimport numpy as np
+from zoneinfo import ZoneInfo
+import numpy as np
 
 from strategies.momentum.orb_detector import evaluate
 
