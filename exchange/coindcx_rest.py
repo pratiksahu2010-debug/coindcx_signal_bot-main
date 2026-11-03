@@ -17,6 +17,9 @@ class CoinDCXRest:
         self._client: Optional[httpx.AsyncClient] = None
         self._semaphore = asyncio.Semaphore(5)  # rate-limit friendly
         self._candle_cache = {}
+        self._ticker_snapshot = None
+        self._ticker_snapshot_at = 0.0
+        self._ticker_lock = asyncio.Lock()
         # pair -> timeframe -> consecutive stale API observations
         self._stale_market_timeframes: Dict[str, Dict[str, int]] = {}
 
@@ -49,8 +52,19 @@ class CoinDCXRest:
         return data if isinstance(data, list) else []
 
     async def get_ticker(self) -> List[Dict]:
-        data = await self._get(f"{self.base}/exchange/ticker")
-        return data if isinstance(data, list) else []
+        # Both strategy engines and delivery validation share one short-lived
+        # market-wide snapshot instead of downloading the full ticker list per pair.
+        now = time.monotonic()
+        if self._ticker_snapshot is not None and now - self._ticker_snapshot_at <= 1.5:
+            return self._ticker_snapshot
+        async with self._ticker_lock:
+            now = time.monotonic()
+            if self._ticker_snapshot is not None and now - self._ticker_snapshot_at <= 1.5:
+                return self._ticker_snapshot
+            data = await self._get(f"{self.base}/exchange/ticker")
+            self._ticker_snapshot = data if isinstance(data, list) else []
+            self._ticker_snapshot_at = time.monotonic()
+            return self._ticker_snapshot
 
     @staticmethod
     def _market_key(value: Any) -> str:
