@@ -119,11 +119,10 @@ async def update_signal_record(signal: dict, status: str) -> bool:
 
 
 async def claim_signal_once(signal: dict, candle_time_ms: int, ttl_hours: int = 4) -> bool:
-    """Claim one alert per pair/engine/direction across process restarts."""
+    """Atomically claim a signal; the unique key arbitrates simultaneous inserts."""
     import json
     from datetime import datetime, timedelta, timezone
-    from sqlalchemy import select, delete
-    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.dialects.postgresql import insert
     from database import db as database_db
     from database.models import SignalDedupRecord
 
@@ -131,47 +130,26 @@ async def claim_signal_once(signal: dict, candle_time_ms: int, ttl_hours: int = 
     if factory is None:
         logger.error("Persistent signal deduplication unavailable; suppressing alert")
         return False
-
-    # One alert per pair/direction/entry candle across Normal and Momentum engines.
-    # Including candle time avoids a four-hour lock suppressing legitimate
-    # signals on later candles, while excluding engine prevents cross-engine
-    # duplicates for the same market move.
-    base_key = f"{signal['pair']}:{signal['direction']}:{int(candle_time_ms)}"
-    key = base_key
+    key = f"{signal['pair']}:{signal['direction']}:{int(candle_time_ms)}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     expires = now + timedelta(hours=max(1, int(ttl_hours)))
+    values = dict(dedup_key=key, candle_time_ms=int(candle_time_ms),
+                  payload=json.dumps(signal, default=str), created_at=now, expires_at=expires)
     async with factory() as session:
         try:
-            # Expired candle claims no longer protect against duplicates; prune
-            # them opportunistically so the persistent dedup table stays bounded.
-            await session.execute(
-                delete(SignalDedupRecord).where(SignalDedupRecord.expires_at <= now)
-            )
-            result = await session.execute(
-                select(SignalDedupRecord)
-                .where(SignalDedupRecord.dedup_key == key)
-                .with_for_update()
-            )
-            record = result.scalar_one_or_none()
-            if record is not None and record.expires_at and record.expires_at > now:
-                return False
-            if record is None:
-                record = SignalDedupRecord(
-                    dedup_key=key, candle_time_ms=int(candle_time_ms),
-                    payload=json.dumps(signal, default=str),
-                    created_at=now, expires_at=expires,
-                )
-                session.add(record)
-            else:
-                record.candle_time_ms = int(candle_time_ms)
-                record.payload = json.dumps(signal, default=str)
-                record.created_at = now
-                record.expires_at = expires
+            statement = insert(SignalDedupRecord).values(**values)
+            statement = statement.on_conflict_do_update(
+                index_elements=[SignalDedupRecord.dedup_key],
+                set_={"candle_time_ms": statement.excluded.candle_time_ms,
+                      "payload": statement.excluded.payload,
+                      "created_at": statement.excluded.created_at,
+                      "expires_at": statement.excluded.expires_at},
+                where=SignalDedupRecord.expires_at <= now,
+            ).returning(SignalDedupRecord.dedup_key)
+            result = await session.execute(statement)
+            claimed = result.scalar_one_or_none() is not None
             await session.commit()
-            return True
-        except IntegrityError:
-            await session.rollback()
-            return False
+            return claimed
         except Exception as exc:
             await session.rollback()
             logger.error(f"Persistent signal claim failed: {exc}")
@@ -179,10 +157,10 @@ async def claim_signal_once(signal: dict, candle_time_ms: int, ttl_hours: int = 
 
 
 async def save_pending_retest(key: str, pending: dict) -> bool:
-    """Upsert a pending retest; timestamps are stored as naive UTC for SQL portability."""
+    """Atomically upsert a pending retest by its stable primary key."""
     import json
     from datetime import datetime, timezone
-    from sqlalchemy import select
+    from sqlalchemy.dialects.postgresql import insert
     from database import db as database_db
     from database.models import PendingRetestRecord
     factory = database_db.SessionLocal
@@ -190,24 +168,23 @@ async def save_pending_retest(key: str, pending: dict) -> bool:
         return False
     expires = datetime.fromtimestamp(float(pending["expires_at"]), tz=timezone.utc).replace(tzinfo=None)
     signal = pending.get("signal") or {}
+    values = dict(key=key, pair=signal.get("pair", ""), engine=signal.get("engine", ""),
+                  direction=signal.get("direction", ""), expires_at=expires,
+                  payload=json.dumps(pending, default=str), updated_at=datetime.utcnow())
     async with factory() as session:
         try:
-            record = await session.get(PendingRetestRecord, key)
-            values = dict(key=key, pair=signal.get("pair", ""), engine=signal.get("engine", ""),
-                          direction=signal.get("direction", ""), expires_at=expires,
-                          payload=json.dumps(pending, default=str), updated_at=datetime.utcnow())
-            if record is None:
-                session.add(PendingRetestRecord(**values))
-            else:
-                for name, value in values.items():
-                    setattr(record, name, value)
+            statement = insert(PendingRetestRecord).values(**values)
+            statement = statement.on_conflict_do_update(
+                index_elements=[PendingRetestRecord.key],
+                set_={name: getattr(statement.excluded, name) for name in values if name != "key"},
+            )
+            await session.execute(statement)
             await session.commit()
             return True
         except Exception as exc:
             await session.rollback()
             logger.error(f"Pending retest persistence failed for {key}: {exc}")
             return False
-
 
 async def load_pending_retests(limit: int = 500) -> list:
     """Restore only valid, unexpired pending retests."""
