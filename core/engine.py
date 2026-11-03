@@ -605,6 +605,23 @@ class SignalEngine:
             indicators["structure_direction_ok"] = indicators["structure_break"]
             # Momentum must be a directional expansion, not merely a high score.
             momentum_state = detect_momentum_state(indicators)
+            if momentum_state == "PRE_EXPLOSION":
+                # Compression + early participation is a watch state only.
+                # It must never generate a Telegram trade alert before release.
+                self._log_candle_evaluation(
+                    pair, engine, direction, candle_ts, candle_close_ms,
+                    confirm_candle_time_ms, indicators, "WATCHLIST",
+                    failed=["awaiting_volatility_release"], strategy=momentum_state,
+                )
+                self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                self.watchlists[engine].add({
+                    "pair": pair, "display": self.symbols.display_name(pair),
+                    "direction": direction, "engine": engine,
+                    "strategy": momentum_state, "score": 0.0,
+                    "grade": "WATCHLIST", "price": float(close[-1]),
+                    "timestamp": utc_iso(utc_now()),
+                })
+                return
             valid_momentum_state = momentum_state in ("EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION")
             momentum_gates = {
                 "momentum_state": valid_momentum_state,
