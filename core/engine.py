@@ -498,6 +498,7 @@ class SignalEngine:
         indicators["orb_range_low"] = orb_result.get("range_low")
         indicators["orb_breakout_level"] = orb_result.get("breakout_level")
         indicators["orb_breakout_extension_atr"] = orb_result.get("breakout_extension_atr")
+        indicators["orb_range_width_atr"] = orb_result.get("range_width_atr")
 
         # Determine direction from EMA9/EMA21 only. VWAP is evaluated as its
         # own mandatory gate below; candle direction/body is not a gate.
