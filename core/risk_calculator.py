@@ -29,17 +29,39 @@ def calculate_risk(price: float, atr: float, direction: str, atr_mult_sl: float=
         targets=[price-1.5*risk,price-2.5*risk,price-4.0*risk]
         zone=(price-0.10*atr,price+0.15*atr)
     if risk<=0: return None
-    rrs=[abs(t-price)/risk for t in targets]
+    # Conservative combined round-trip fee/slippage allowance (15 bps).
+    # Keep gross target levels intact for display; use net reward for validation.
+    cost_per_unit = price * 0.0015
+    rrs=[max(0.0, abs(t-price)-cost_per_unit)/risk for t in targets]
     return RiskLevels(round(price,8),round(zone[0],8),round(zone[1],8),round(sl,8),
         round(targets[0],8),round(targets[1],8),round(targets[2],8),round(risk/price*100,4),
         round(rrs[0],2),round(rrs[1],2),round(rrs[2],2),round(sl,8))
 
 
-def is_entry_price_actionable(live_price: float, zone_low: float, zone_high: float) -> bool:
-    """Return True only when a fresh ticker price remains inside the planned entry zone."""
+def classify_entry_state(live_price: float, entry: float, zone_low: float,
+                          zone_high: float, direction: str) -> str:
+    """Classify entry without widening the actionable zone into a chase."""
     try:
-        price, low, high = float(live_price), float(zone_low), float(zone_high)
+        import math
+        price, anchor = float(live_price), float(entry)
+        low, high = float(zone_low), float(zone_high)
     except (TypeError, ValueError, OverflowError):
-        return False
-    import math
-    return math.isfinite(price) and math.isfinite(low) and math.isfinite(high) and 0 < low <= price <= high
+        return "EXPIRED"
+    if not all(math.isfinite(x) for x in (price, anchor, low, high)) or min(price, anchor, low) <= 0 or high <= low:
+        return "EXPIRED"
+    if low <= price <= high:
+        return "IMMEDIATE"
+    # Outside the entry band but still close enough to monitor for a pullback.
+    # It is never an alert until price returns to the original zone.
+    width = high - low
+    if direction == "LONG" and high < price <= high + 1.5 * width:
+        return "RETEST"
+    if direction == "SHORT" and low - 1.5 * width <= price < low:
+        return "RETEST"
+    return "EXPIRED"
+
+
+def is_entry_price_actionable(live_price: float, zone_low: float, zone_high: float) -> bool:
+    """Backward-compatible strict check for immediate entries only."""
+    return classify_entry_state(live_price, (zone_low + zone_high) / 2.0,
+                                zone_low, zone_high, "LONG") == "IMMEDIATE"
