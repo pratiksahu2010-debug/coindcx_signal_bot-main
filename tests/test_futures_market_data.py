@@ -245,3 +245,44 @@ async def test_futures_ticker_snapshot_and_symbol_lookup_share_freshness_rules(m
     assert sum(age is not None and -5 <= age <= 10 for age in ages) == 1
     assert await client.get_last_price("B-BTC_USDT") == 65000.0
     assert await client.get_last_price("B-ETH_USDT") is None
+
+
+@pytest.mark.asyncio
+async def test_futures_ticker_accepts_bounded_six_second_future_clock_skew(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return {"ts": now_ms + 6_000, "prices": {"B-ETH_USDT": {"ls": "3000"}}}
+
+    client._get = fake_get
+    rows = await client.get_ticker()
+    age = client._ticker_age_seconds(rows[0]["timestamp"], now_ms)
+    assert age == -6.0
+    assert client._is_fresh_ticker_age(age, client.MAX_REST_TICKER_AGE_SECONDS)
+    assert await client.get_last_price("B-ETH_USDT") == 3000.0
+
+
+@pytest.mark.asyncio
+async def test_futures_ticker_rejects_timestamp_beyond_future_skew_limit(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return {"ts": now_ms + 16_000, "prices": {"B-ETH_USDT": {"ls": "3000"}}}
+
+    client._get = fake_get
+    assert await client.get_last_price("B-ETH_USDT") is None
+
+
+def test_futures_ws_accepts_bounded_future_timestamp_skew(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+    accepted = client.set_ws_prices(
+        {"B-BTC_USDT": {"ls": "65000", "ts": now_ms + 6_000}},
+        now_ms + 6_000,
+    )
+    assert accepted == 1
