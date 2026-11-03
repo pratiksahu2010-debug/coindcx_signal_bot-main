@@ -137,6 +137,13 @@ async def claim_signal_once(signal: dict, candle_time_ms: int, ttl_hours: int = 
                   payload=json.dumps(signal, default=str), created_at=now, expires_at=expires)
     async with factory() as session:
         try:
+            # Prune expired claims in the same transaction as the new claim.
+            # This preserves the existing retention contract while the unique
+            # constraint + ON CONFLICT statement still arbitrates concurrent claims.
+            from sqlalchemy import delete
+            await session.execute(
+                delete(SignalDedupRecord).where(SignalDedupRecord.expires_at <= now)
+            )
             statement = insert(SignalDedupRecord).values(**values)
             statement = statement.on_conflict_do_update(
                 index_elements=[SignalDedupRecord.dedup_key],
