@@ -84,9 +84,11 @@ def _normal_relative_volume_gate(
         np.isfinite(rvol_value) and np.isfinite(threshold)
         and threshold > 0 and rvol_value >= threshold
     )
+    # Candle-body direction is deliberately NOT a Normal Engine gate.
+    # CoinDCX OHLCV has no aggressor-side volume; keep the user's simple
+    # threshold model and use RVOL only to decide alert vs watchlist.
     return {
         "relative_volume": bool(relative_volume_ok),
-        "directional_volume": bool(indicators.get("directional_volume_proxy_ok")),
     }
 
 
