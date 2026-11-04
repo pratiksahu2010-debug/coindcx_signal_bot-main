@@ -177,3 +177,43 @@ def test_normal_relative_volume_threshold_is_configurable():
         ).values())
     finally:
         settings.normal_rvol_min = old
+
+def test_watchlist_removes_stale_normal_setup_when_rvol_recovers_or_core_setup_fails():
+    from core.watchlist_manager import WatchlistManager
+
+    watchlist = WatchlistManager(max_entries=10, ttl_minutes=60)
+    watchlist.add({
+        "pair": "B-BTC_USDT", "engine": "normal", "direction": "LONG",
+        "score": 0.0, "grade": "WATCHLIST", "watch_reason": "WAITING_FOR_RVOL_1_2",
+    })
+    watchlist.add({
+        "pair": "B-BTC_USDT", "engine": "normal", "direction": "SHORT",
+        "score": 0.0, "grade": "WATCHLIST", "watch_reason": "WAITING_FOR_RVOL_1_2",
+    })
+    watchlist.add({
+        "pair": "B-BTC_USDT", "engine": "momentum", "direction": "LONG",
+        "score": 5.5, "grade": "WATCHLIST",
+    })
+
+    removed = watchlist.remove_pair("B-BTC_USDT", "normal")
+
+    assert removed == 2
+    assert watchlist.get("B-BTC_USDT", "normal", "LONG") is None
+    assert watchlist.get("B-BTC_USDT", "normal", "SHORT") is None
+    # Normal cleanup must not touch the independent Momentum watchlist.
+    assert watchlist.get("B-BTC_USDT", "momentum", "LONG") is not None
+
+
+def test_normal_rvol_gate_rejects_nonfinite_and_nonpositive_thresholds():
+    from core.engine import _normal_relative_volume_gate
+
+    for value in (float("nan"), float("inf"), -float("inf"), None):
+        gates = _normal_relative_volume_gate(
+            {"rvol": value, "directional_volume_proxy_ok": True}, "LONG", 1.2
+        )
+        assert gates["relative_volume"] is False
+
+    assert _normal_relative_volume_gate(
+        {"rvol": 2.0, "directional_volume_proxy_ok": True}, "LONG", 0.0
+    )["relative_volume"] is False
+
