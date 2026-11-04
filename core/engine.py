@@ -685,6 +685,9 @@ class SignalEngine:
                     confirm_candle_time_ms, indicators, "WATCHLIST",
                     failed=volume_failed, strategy=strategy,
                 )
+                # Replace any prior opposite-direction watch entry; only the
+                # latest qualified direction should remain visible for this pair.
+                self.watchlists["normal"].remove_pair(pair, "normal")
                 watch_score = self.normal_scoring.score_normal(indicators, direction)
                 self.watchlists["normal"].add({
                     "pair": pair, "display": self.symbols.display_name(pair),
