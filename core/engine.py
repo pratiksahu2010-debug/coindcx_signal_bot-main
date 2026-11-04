@@ -65,6 +65,31 @@ def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min:
     }
 
 
+def _normal_relative_volume_gate(
+    indicators: Dict[str, Any], direction: str, min_rvol: float
+) -> Dict[str, bool]:
+    """Require elevated completed-candle volume with a directional candle proxy.
+
+    CoinDCX OHLCV candles do not expose aggressor-side buy/sell volume. The
+    candle body direction is therefore used only as a transparent proxy for
+    directional participation; this is not exchange-reported taker volume.
+    """
+    try:
+        rvol_value = float(indicators.get("rvol"))
+        threshold = float(min_rvol)
+    except (TypeError, ValueError, OverflowError):
+        rvol_value = float("nan")
+        threshold = float("nan")
+    relative_volume_ok = (
+        np.isfinite(rvol_value) and np.isfinite(threshold)
+        and threshold > 0 and rvol_value >= threshold
+    )
+    return {
+        "relative_volume": bool(relative_volume_ok),
+        "directional_volume": bool(indicators.get("directional_volume_proxy_ok")),
+    }
+
+
 def _macd_hist_history(closes: Any, points: int = 4) -> List[float]:
     """Return recent MACD histogram observations.
 
@@ -422,8 +447,7 @@ class SignalEngine:
                 f"STALE_CANDLE_SKIP {pair} engine={engine} candle_open_ms={candle_ts} "
                 f"candle_close_ms={candle_close_ms} age_seconds={initial_age:.1f} "
                 f"max_age_seconds={settings.max_signal_age_seconds}"
-            )
-            return
+            )            return
 
         # Indicators
         ema9 = ema(close, 9)
@@ -592,6 +616,12 @@ class SignalEngine:
                 f"body={signed_body:.8g}"
             )
             return
+        # CoinDCX OHLCV does not expose aggressor-side buy/sell volume.
+        # Use completed candle body direction as an explicit participation proxy.
+        indicators["directional_volume_proxy_ok"] = bool(
+            (direction == "LONG" and signed_body > 0) or
+            (direction == "SHORT" and signed_body < 0)
+        )
         indicators["macd_direction_ok"] = bool(
             macd_hist is not None and (
                 (direction == "LONG" and macd_hist > 0) or
@@ -634,7 +664,43 @@ class SignalEngine:
                     strategy=strategy,
                 )
                 return
-            # Keep anti-chasing as a separate entry-safety rule, not a seventh
+            # Relative-volume confirmation is an additional Normal-only gate.
+            # It is deliberately separate from the original five mandatory gates.
+            volume_gates = _normal_relative_volume_gate(
+                indicators, direction, settings.normal_rvol_min
+            )
+            volume_failed = [name for name, passed in volume_gates.items() if not passed]
+            if volume_failed:
+                # Do not discard an otherwise-qualified Normal setup for weak
+                # participation. Keep it visible and re-evaluate on each new
+                # completed candle until RVOL reaches the configured 1.2x floor.
+                self._log_candle_evaluation(
+                    pair, engine, direction, candle_ts, candle_close_ms,
+                    confirm_candle_time_ms, indicators, "WATCHLIST",
+                    failed=volume_failed, strategy=strategy,
+                )
+                self.watchlists["normal"].add({
+                    "pair": pair, "display": self.symbols.display_name(pair),
+                    "direction": direction, "engine": "normal",
+                    "strategy": strategy, "score": 0.0,
+                    "grade": "WATCHLIST", "price": float(close[-1]),
+                    "indicators": {
+                        k: (round(v, 4) if isinstance(v, (float, np.floating)) else v)
+                        for k, v in indicators.items() if v is not None
+                    },
+                    "watch_reason": "WAITING_FOR_RVOL_1_2",
+                    "timestamp": utc_iso(utc_now()),
+                })
+                self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                logger.info(
+                    f"NORMAL_RVOL_WATCHLIST pair={pair} direction={direction} "
+                    f"rvol={indicators.get('rvol')} min_rvol={settings.normal_rvol_min} "
+                    f"failed={','.join(volume_failed)} "
+                    f"directional_proxy_ok={indicators.get('directional_volume_proxy_ok')} "
+                    "action=WAIT_FOR_NEXT_COMPLETED_CANDLE"
+                )
+                return
+            # Keep anti-chasing as a separate entry-safety rule, not an eighth
             # indicator threshold.
             if not indicators["not_chasing"]:
                 self._log_candle_evaluation(
@@ -848,8 +914,7 @@ class SignalEngine:
                 "entry": risk.entry,
                 "entry_zone": [risk.entry_zone_low, risk.entry_zone_high],
                 "stop_loss": risk.stop_loss,
-                "tp1": risk.tp1,
-                "tp2": risk.tp2,
+                "tp1": risk.tp1,                "tp2": risk.tp2,
                 "tp3": risk.tp3,
                 "risk_pct": risk.risk_pct,
                 "rr": [risk.rr1, risk.rr2, risk.rr3],
