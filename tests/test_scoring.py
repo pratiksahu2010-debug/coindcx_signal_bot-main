@@ -121,3 +121,47 @@ def test_orb_scoring_rewards_clean_breakout_and_penalizes_extension():
     }, "LONG")
     assert clean.total >= 7.0
     assert clean.total > stretched.total
+
+
+def test_normal_relative_volume_gate_requires_strength_and_direction():
+    from core.engine import _normal_relative_volume_gate
+
+    long_ok = {
+        "rvol": 1.3, "directional_volume_proxy_ok": True,
+    }
+    assert all(_normal_relative_volume_gate(long_ok, "LONG", 1.3).values())
+
+    short_ok = {
+        "rvol": 1.6, "directional_volume_proxy_ok": True,
+    }
+    assert all(_normal_relative_volume_gate(short_ok, "SHORT", 1.3).values())
+
+    weak_volume = _normal_relative_volume_gate(
+        {"rvol": 1.29, "directional_volume_proxy_ok": True}, "LONG", 1.3
+    )
+    assert weak_volume == {"relative_volume": False, "directional_volume": True}
+
+    wrong_direction = _normal_relative_volume_gate(
+        {"rvol": 1.8, "directional_volume_proxy_ok": False}, "LONG", 1.3
+    )
+    assert wrong_direction == {"relative_volume": True, "directional_volume": False}
+
+    missing_volume = _normal_relative_volume_gate(
+        {"rvol": None, "directional_volume_proxy_ok": True}, "SHORT", 1.3
+    )
+    assert missing_volume["relative_volume"] is False
+
+
+def test_normal_relative_volume_threshold_is_configurable():
+    from config import settings
+
+    old = settings.normal_rvol_min
+    try:
+        settings.normal_rvol_min = 1.5
+        from core.engine import _normal_relative_volume_gate
+        assert not all(_normal_relative_volume_gate(
+            {"rvol": 1.4, "directional_volume_proxy_ok": True}, "LONG",
+            settings.normal_rvol_min
+        ).values())
+    finally:
+        settings.normal_rvol_min = old
