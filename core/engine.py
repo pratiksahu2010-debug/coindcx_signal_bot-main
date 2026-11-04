@@ -685,15 +685,20 @@ class SignalEngine:
                     confirm_candle_time_ms, indicators, "WATCHLIST",
                     failed=volume_failed, strategy=strategy,
                 )
+                watch_score = self.normal_scoring.score_normal(indicators, direction)
                 self.watchlists["normal"].add({
                     "pair": pair, "display": self.symbols.display_name(pair),
                     "direction": direction, "engine": "normal",
-                    "strategy": strategy, "score": 0.0,
+                    "strategy": strategy, "score": watch_score.total,
                     "grade": "WATCHLIST", "price": float(close[-1]),
                     "indicators": {
                         k: (round(v, 4) if isinstance(v, (float, np.floating)) else v)
                         for k, v in indicators.items() if v is not None
                     },
+                    "components": [
+                        {"name": item.name, "points": item.points, "max": item.max_points}
+                        for item in watch_score.components
+                    ],
                     "watch_reason": "WAITING_FOR_RVOL_1_2",
                     "timestamp": utc_iso(utc_now()),
                 })
