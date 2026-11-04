@@ -65,6 +65,31 @@ def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min:
     }
 
 
+def _normal_relative_volume_gate(
+    indicators: Dict[str, Any], direction: str, min_rvol: float
+) -> Dict[str, bool]:
+    """Require elevated completed-candle volume with a directional candle proxy.
+
+    CoinDCX OHLCV candles do not expose aggressor-side buy/sell volume. The
+    candle body direction is therefore used only as a transparent proxy for
+    directional participation; this is not exchange-reported taker volume.
+    """
+    try:
+        rvol_value = float(indicators.get("rvol"))
+        threshold = float(min_rvol)
+    except (TypeError, ValueError, OverflowError):
+        rvol_value = float("nan")
+        threshold = float("nan")
+    relative_volume_ok = (
+        np.isfinite(rvol_value) and np.isfinite(threshold)
+        and threshold > 0 and rvol_value >= threshold
+    )
+    return {
+        "relative_volume": bool(relative_volume_ok),
+        "directional_volume": bool(indicators.get("directional_volume_proxy_ok")),
+    }
+
+
 def _macd_hist_history(closes: Any, points: int = 4) -> List[float]:
     """Return recent MACD histogram observations.
 
@@ -534,6 +559,11 @@ class SignalEngine:
             "body_ratio": body_ratio, "close_location": close_location,
             "upper_wick_ratio": upper_wick, "lower_wick_ratio": lower_wick,
             "rsi_prev": rsi(close[:-1],14),
+            # OHLCV-only directional participation proxy; not true aggressor volume.
+            "directional_volume_proxy_ok": bool(
+                (direction == "LONG" and signed_body > 0) or
+                (direction == "SHORT" and signed_body < 0)
+            ),
         }
 
         # ORB owns a fixed 5-minute Futures feed, independent of the configurable
@@ -634,7 +664,25 @@ class SignalEngine:
                     strategy=strategy,
                 )
                 return
-            # Keep anti-chasing as a separate entry-safety rule, not a seventh
+            # Relative-volume confirmation is an additional Normal-only gate.
+            # It is deliberately separate from the original five mandatory gates.
+            volume_gates = _normal_relative_volume_gate(
+                indicators, direction, settings.normal_rvol_min
+            )
+            volume_failed = [name for name, passed in volume_gates.items() if not passed]
+            if volume_failed:
+                self._log_candle_evaluation(
+                    pair, engine, direction, candle_ts, candle_close_ms,
+                    confirm_candle_time_ms, indicators, "REJECT",
+                    failed=volume_failed, strategy=strategy,
+                )
+                logger.info(
+                    f"NORMAL_RELATIVE_VOLUME_REJECT pair={pair} direction={direction} "
+                    f"rvol={indicators.get('rvol')} min_rvol={settings.normal_rvol_min} "
+                    f"directional_proxy_ok={indicators.get('directional_volume_proxy_ok')}"
+                )
+                return
+            # Keep anti-chasing as a separate entry-safety rule, not an eighth
             # indicator threshold.
             if not indicators["not_chasing"]:
                 self._log_candle_evaluation(
