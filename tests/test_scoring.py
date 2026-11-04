@@ -123,34 +123,29 @@ def test_orb_scoring_rewards_clean_breakout_and_penalizes_extension():
     assert clean.total > stretched.total
 
 
-def test_normal_relative_volume_gate_requires_strength_and_direction():
+def test_normal_relative_volume_gate_uses_strength_without_direction():
     from core.engine import _normal_relative_volume_gate
 
-    long_ok = {
-        "rvol": 1.2, "directional_volume_proxy_ok": True,
-    }
-    assert all(_normal_relative_volume_gate(long_ok, "LONG", 1.2).values())
+    # Passing RVOL is sufficient even when the candle-direction proxy opposes
+    # the signal direction or is absent entirely.
+    for indicators in (
+        {"rvol": 1.2, "directional_volume_proxy_ok": False},
+        {"rvol": 1.2},
+    ):
+        assert _normal_relative_volume_gate(indicators, "LONG", 1.2) == {
+            "relative_volume": True,
+        }
 
-    short_ok = {
-        "rvol": 1.6, "directional_volume_proxy_ok": True,
-    }
-    assert all(_normal_relative_volume_gate(short_ok, "SHORT", 1.3).values())
-
+    # Low RVOL remains a single failed volume threshold, not a directional veto.
     weak_volume = _normal_relative_volume_gate(
         {"rvol": 1.19, "directional_volume_proxy_ok": True}, "LONG", 1.2
     )
-    assert weak_volume == {"relative_volume": False, "directional_volume": True}
-
-    wrong_direction = _normal_relative_volume_gate(
-        {"rvol": 1.8, "directional_volume_proxy_ok": False}, "LONG", 1.3
-    )
-    assert wrong_direction == {"relative_volume": True, "directional_volume": False}
+    assert weak_volume == {"relative_volume": False}
 
     missing_volume = _normal_relative_volume_gate(
-        {"rvol": None, "directional_volume_proxy_ok": True}, "SHORT", 1.3
+        {"rvol": None, "directional_volume_proxy_ok": False}, "SHORT", 1.3
     )
-    assert missing_volume["relative_volume"] is False
-
+    assert missing_volume == {"relative_volume": False}
 
 def test_normal_relative_volume_below_threshold_stays_watchlist_eligible():
     from core.engine import _normal_relative_volume_gate
@@ -160,7 +155,7 @@ def test_normal_relative_volume_below_threshold_stays_watchlist_eligible():
             {"rvol": rvol, "directional_volume_proxy_ok": True}, "LONG", 1.2
         )
         assert gates["relative_volume"] is False
-        # Engine disposition for every failed RVOL/directional proxy is WATCHLIST,
+        # Engine disposition for failed RVOL is WATCHLIST,
         # never a hard rejection; next completed candle is evaluated afresh.
 
 
