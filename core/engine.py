@@ -278,12 +278,17 @@ class SignalEngine:
     async def _wait_for_next_primary_boundary(self) -> None:
         interval_ms = int(parse_interval(settings.candle_primary_tf).total_seconds() * 1000)
         grace_ms = max(0, int(settings.candle_close_grace_seconds)) * 1000
-        delay = seconds_until_next_candle_boundary(
-            int(utc_now().timestamp() * 1000), interval_ms, grace_ms
-        )
+        now_ms = int(utc_now().timestamp() * 1000)
+        delay = seconds_until_next_candle_boundary(now_ms, interval_ms, grace_ms)
+        next_scan_utc = datetime.fromtimestamp(
+            (now_ms / 1000.0) + delay, tz=timezone.utc
+        ).isoformat()
         logger.info(
-            f"SCAN_BOUNDARY_WAIT timeframe={settings.candle_primary_tf} "
-            f"grace_seconds={grace_ms / 1000:.0f} wait_seconds={delay:.1f}"
+            f"SCAN_SCHEDULE mode=completed_candle_boundary "
+            f"timeframe={settings.candle_primary_tf} "
+            f"grace_seconds={grace_ms / 1000:.0f} wait_seconds={delay:.1f} "
+            f"next_scan_utc={next_scan_utc} "
+            f"max_signal_age_seconds={settings.max_signal_age_seconds}"
         )
         if delay > 0:
             await asyncio.sleep(delay)
@@ -338,6 +343,13 @@ class SignalEngine:
 
                 finished = utc_now()
                 duration_ms = int((finished - start).total_seconds() * 1000)
+                interval_seconds = parse_interval(settings.candle_primary_tf).total_seconds()
+                if duration_ms > interval_seconds * 1000:
+                    logger.warning(
+                        f"SCAN_CYCLE_OVERRUN engine={engine} duration_ms={duration_ms} "
+                        f"candle_interval_seconds={interval_seconds:.0f} "
+                        f"late_symbols_may_be_rejected=true"
+                    )
                 self.last_scan_time = finished
                 state = app.state.bot_state
                 state["last_scan"] = utc_iso(finished)
@@ -383,26 +395,50 @@ class SignalEngine:
         started = asyncio.get_running_loop().time()
         errors_before = self.scan_errors[engine]
 
+        cycle_started_utc = utc_iso(utc_now())
+        symbol_durations = []
+        logger.info(
+            f"SCAN_CYCLE_START engine={engine} symbols_submitted={len(pairs)} "
+            f"started_at_utc={cycle_started_utc} "
+            f"max_signal_age_seconds={settings.max_signal_age_seconds}"
+        )
+
         async def process(pair: str) -> None:
+            symbol_started = asyncio.get_running_loop().time()
+            outcome = "ok"
             try:
                 await self._process_pair(pair, engine=engine)
             except Exception as exc:
+                outcome = "error"
                 self.scan_errors[engine] += 1
                 logger.exception(f"{engine.title()} scan failed for {pair}: {exc}")
+            finally:
+                elapsed_ms = int((asyncio.get_running_loop().time() - symbol_started) * 1000)
+                symbol_durations.append(elapsed_ms)
+                logger.info(
+                    f"SCAN_SYMBOL_TIMING engine={engine} pair={pair} "
+                    f"duration_ms={elapsed_ms} outcome={outcome}"
+                )
 
         # CoinDCXRest applies a five-request semaphore. Scheduling the symbol
-        # tasks concurrently lets that limit work instead of serializing 120
-        # markets and allowing later signals to age out before evaluation.
+        # tasks concurrently lets that limit work instead of serializing markets
+        # and allowing later signals to age out before evaluation.
         await asyncio.gather(*(process(pair) for pair in pairs))
 
         duration_ms = int((asyncio.get_running_loop().time() - started) * 1000)
         active = len(self.signals[engine].list_active())
         watching = self.watchlists[engine].count()
+        max_symbol_ms = max(symbol_durations, default=0)
+        avg_symbol_ms = round(sum(symbol_durations) / len(symbol_durations), 1) if symbol_durations else 0
         logger.info(
             f"SCAN_CYCLE_SUMMARY engine={engine} symbols_submitted={len(pairs)} "
+            f"symbols_finished={len(symbol_durations)} "
             f"scan_errors={self.scan_errors[engine]} "
             f"errors_this_cycle={self.scan_errors[engine] - errors_before} "
-            f"active_signals={active} watchlist={watching} duration_ms={duration_ms}"
+            f"active_signals={active} watchlist={watching} duration_ms={duration_ms} "
+            f"max_symbol_duration_ms={max_symbol_ms} "
+            f"avg_symbol_duration_ms={avg_symbol_ms} "
+            f"started_at_utc={cycle_started_utc} finished_at_utc={utc_iso(utc_now())}"
         )
 
     async def _scan_normal(self) -> None:

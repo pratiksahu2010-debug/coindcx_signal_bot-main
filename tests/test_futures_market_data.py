@@ -289,7 +289,7 @@ def test_futures_ws_accepts_bounded_future_timestamp_skew(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_futures_ws_start_uses_compatible_connect_signature(monkeypatch):
+async def test_futures_ws_resubscribes_all_channels_after_reconnect(monkeypatch):
     from exchange.coindcx_ws import CoinDCXFuturesStream
 
     class CandleStub:
@@ -300,26 +300,57 @@ async def test_futures_ws_start_uses_compatible_connect_signature(monkeypatch):
         def __init__(self):
             self.connected = False
             self.emitted = []
+            self.handlers = {}
+
+        def event(self, handler):
+            self.handlers[handler.__name__] = handler
+            return handler
+
+        def on(self, event_name):
+            def register(handler):
+                self.handlers[event_name] = handler
+                return handler
+            return register
 
         async def connect(self, url, transports=None):
             self.connected = True
             self.connect_args = {"url": url, "transports": transports}
+            await self.handlers["connect"]()
 
         async def emit(self, event, payload):
             self.emitted.append((event, payload))
 
         async def disconnect(self):
             self.connected = False
+            await self.handlers["disconnect"]()
 
+    socket = SocketStub()
+    monkeypatch.setattr("exchange.coindcx_ws.socketio.AsyncClient", lambda **kwargs: socket)
     monkeypatch.setattr("exchange.coindcx_ws.settings.enable_websocket", True)
     stream = CoinDCXFuturesStream(CandleStub(), CoinDCXRest())
-    socket = SocketStub()
-    stream.client = socket
 
-    started = await stream.start(["B-BTC_USDT"])
+    started = await stream.start(["B-BTC_USDT", "B-ETH_USDT"])
 
     assert started is True
     assert socket.connect_args["transports"] == ["websocket"]
-    assert ("join", {"channelName": "currentPrices@futures@rt"}) in socket.emitted
-    assert any(payload.get("channelName") == "B-BTC_USDT_5m-futures"
-               for event, payload in socket.emitted if event == "join")
+    expected = {
+        "currentPrices@futures@rt",
+        "B-BTC_USDT_5m-futures", "B-BTC_USDT_15m-futures",
+        "B-ETH_USDT_5m-futures", "B-ETH_USDT_15m-futures",
+    }
+    first_joins = [payload["channelName"] for event, payload in socket.emitted if event == "join"]
+    assert set(first_joins) == expected
+    assert len(first_joins) == len(expected)
+    assert stream._subscribed_channels == expected
+
+    # Simulate an unexpected disconnect and the automatic Socket.IO reconnect.
+    await socket.handlers["disconnect"]()
+    assert stream._subscribed_channels == set()
+    socket.connected = True
+    await socket.handlers["connect"]()
+
+    all_joins = [payload["channelName"] for event, payload in socket.emitted if event == "join"]
+    assert all_joins.count("currentPrices@futures@rt") == 2
+    assert set(all_joins) == expected
+    assert len(all_joins) == len(expected) * 2
+    assert stream._subscribed_channels == expected
