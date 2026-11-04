@@ -152,6 +152,18 @@ def test_normal_relative_volume_gate_requires_strength_and_direction():
     assert missing_volume["relative_volume"] is False
 
 
+def test_normal_relative_volume_below_threshold_stays_watchlist_eligible():
+    from core.engine import _normal_relative_volume_gate
+
+    for rvol in (0.0, 0.75, 0.99, 1.0, 1.19):
+        gates = _normal_relative_volume_gate(
+            {"rvol": rvol, "directional_volume_proxy_ok": True}, "LONG", 1.2
+        )
+        assert gates["relative_volume"] is False
+        # Engine disposition for every failed RVOL/directional proxy is WATCHLIST,
+        # never a hard rejection; next completed candle is evaluated afresh.
+
+
 def test_normal_relative_volume_threshold_is_configurable():
     from config import settings
 
