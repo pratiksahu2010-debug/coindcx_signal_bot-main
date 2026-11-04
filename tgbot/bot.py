@@ -3,6 +3,7 @@ from typing import Optional, List, Any, Dict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import re
+import time
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
@@ -51,7 +52,16 @@ class TelegramBot:
             logger.warning("TELEGRAM_BOT_TOKEN not set — Telegram disabled")
             return
         try:
-            self.app = Application.builder().token(self.token).build()
+            # Bound outbound Telegram HTTP latency so one slow recipient cannot
+            # hold a signal scan indefinitely. These are transport timeouts, not retries.
+            self.app = (
+                Application.builder().token(self.token)
+                .connect_timeout(5.0)
+                .read_timeout(10.0)
+                .write_timeout(10.0)
+                .pool_timeout(5.0)
+                .build()
+            )
             self.bot = self.app.bot
             await self.app.initialize()
             await self.app.start()
@@ -244,6 +254,7 @@ class TelegramBot:
         text = self.format_signal(signal)
         success_count = 0
         for chat_id in self.admin_ids:
+            recipient_started = time.perf_counter()
             try:
                 await self.bot.send_message(
                     chat_id=chat_id,
@@ -253,11 +264,21 @@ class TelegramBot:
                 )
                 success_count += 1
                 logger.info(
+                    f"TELEGRAM_RECIPIENT_DELIVERED chat_id={chat_id} "
+                    f"duration_ms={( __import__('time').perf_counter() - recipient_started) * 1000.0:.1f}"
+                )
+                logger.info(
                     f"Telegram signal sent to {chat_id}: "
                     f"{signal.get('pair')} {signal.get('direction')}"
                 )
             except TelegramError as e:
-                logger.error(f"Telegram send failed to {chat_id}: {e}")
+                logger.error(
+                    f"TELEGRAM_RECIPIENT_FAILED chat_id={chat_id} "
+                    f"duration_ms={( __import__('time').perf_counter() - recipient_started) * 1000.0:.1f} error={e}"
+                )
             except Exception as e:
-                logger.error(f"Telegram unexpected error to {chat_id}: {e}")
+                logger.error(
+                    f"TELEGRAM_RECIPIENT_UNEXPECTED_ERROR chat_id={chat_id} "
+                    f"duration_ms={( __import__('time').perf_counter() - recipient_started) * 1000.0:.1f} error={e}"
+                )
         return success_count > 0
