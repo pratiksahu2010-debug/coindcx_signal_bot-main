@@ -448,9 +448,13 @@ class SignalEngine:
         await self._scan_pairs(self.symbols.momentum_symbols, "momentum")
 
     async def _process_pair(self, pair: str, engine: str) -> None:
+        pair_started = asyncio.get_running_loop().time()
         # Refresh primary TF candles
         primary = settings.candle_primary_tf
+        candle_fetch_started = asyncio.get_running_loop().time()
         data = await self.rest.get_candles(pair, primary, limit=PRIMARY_CANDLE_HISTORY)
+        candle_fetch_ms = (asyncio.get_running_loop().time() - candle_fetch_started) * 1000.0
+        logger.info(f"SIGNAL_STAGE pair={pair} engine={engine} stage=primary_candle_fetch duration_ms={candle_fetch_ms:.1f}")
         if len(data) < 50:
             return
         self.candles.seed(pair, primary, data)
@@ -487,6 +491,7 @@ class SignalEngine:
             return
 
         # Indicators
+        indicator_started = asyncio.get_running_loop().time()
         ema9 = ema(close, 9)
         ema21 = ema(close, 21)
         ema50 = ema(close, 50)
@@ -981,6 +986,15 @@ class SignalEngine:
             else _score_disposition(result.total, settings.signal_threshold)
         )
         if disposition == "SIGNAL":
+            detection_elapsed_ms = (asyncio.get_running_loop().time() - pair_started) * 1000.0
+            detected_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
+            logger.info(
+                f"SIGNAL_DETECTED pair={pair} engine={engine} direction={direction} "
+                f"strategy={strategy} candle_close_ms={candle_close_ms} "
+                f"candle_age_seconds={detected_age:.1f} "
+                f"pair_processing_ms={detection_elapsed_ms:.1f} "
+                f"indicator_and_strategy_ms={(asyncio.get_running_loop().time() - indicator_started) * 1000.0:.1f}"
+            )
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
                 confirm_candle_time_ms, indicators, "CANDIDATE",
@@ -999,12 +1013,14 @@ class SignalEngine:
                 return
             signal["signal_age_seconds"] = round(final_age, 1)
             # Require a fresh public ticker to remain inside the planned entry zone.
+            entry_price_started = asyncio.get_running_loop().time()
             try:
                 live_price = await self.rest.get_last_price(pair)
             except Exception as exc:
                 logger.warning(f"ENTRY_PRICE_CHECK_FAILED {pair}: {exc}")
                 self._last_processed.setdefault(engine, {})[pair] = candle_ts
                 return
+            logger.info(f"SIGNAL_STAGE pair={pair} engine={engine} stage=initial_entry_price_check duration_ms={(asyncio.get_running_loop().time() - entry_price_started) * 1000.0:.1f}")
             zone_low, zone_high = risk.entry_zone_low, risk.entry_zone_high
             entry_state = (
                 classify_entry_state(live_price, risk.entry, zone_low, zone_high, direction)
@@ -1065,7 +1081,9 @@ class SignalEngine:
                 # a second worker sharing the same database.
                 try:
                     from database.repositories import claim_signal_once
+                    claim_started = asyncio.get_running_loop().time()
                     claimed = await claim_signal_once(signal, candle_ts, ttl_hours=4)
+                    logger.info(f"SIGNAL_STAGE pair={pair} engine={engine} stage=database_claim duration_ms={(asyncio.get_running_loop().time() - claim_started) * 1000.0:.1f} claimed={claimed}")
                 except Exception as exc:
                     logger.error(f"Persistent signal deduplication unavailable: {exc}")
                     claimed = False
@@ -1080,11 +1098,13 @@ class SignalEngine:
                 # Recheck price and age after the durable DB claim, immediately
                 # before Telegram delivery; a slow DB write must not stale the entry.
                 if self.telegram:
+                    delivery_price_started = asyncio.get_running_loop().time()
                     try:
                         delivery_price = await self.rest.get_last_price(pair)
                     except Exception as exc:
                         delivery_price = None
                         logger.warning(f"DELIVERY_PRICE_CHECK_FAILED {pair}: {exc}")
+                    logger.info(f"SIGNAL_STAGE pair={pair} engine={engine} stage=final_delivery_price_check duration_ms={(asyncio.get_running_loop().time() - delivery_price_started) * 1000.0:.1f}")
                     delivery_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
                     if (
                         delivery_price is None
@@ -1119,11 +1139,19 @@ class SignalEngine:
                         f"TELEGRAM_DELIVERY_ATTEMPT pair={pair} engine={engine} "
                         f"direction={direction} candle_open_ms={candle_ts}"
                     )
+                    telegram_started = asyncio.get_running_loop().time()
                     try:
                         delivered = bool(await self.telegram.send_signal(signal))
                     except Exception as e:
                         logger.error(f"Telegram send error: {e}")
                 if delivered:
+                    telegram_duration_ms = (asyncio.get_running_loop().time() - telegram_started) * 1000.0 if self.telegram else 0.0
+                    end_to_end_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
+                    logger.info(
+                        f"TELEGRAM_DELIVERY_CONFIRMED pair={pair} engine={engine} "
+                        f"telegram_duration_ms={telegram_duration_ms:.1f} "
+                        f"candle_close_to_confirmation_seconds={end_to_end_age:.1f}"
+                    )
                     self.cooldowns[engine].set(pair, engine, direction)
                     logger.info(
                         f"SIGNAL_DELIVERED {result.grade} {direction} {pair} "
@@ -1149,6 +1177,8 @@ class SignalEngine:
                         except Exception as exc:
                             logger.error(f"ACTIVE_SIGNAL_PERSIST_ERROR {pair}: {exc}")
                 else:
+                    telegram_duration_ms = (asyncio.get_running_loop().time() - telegram_started) * 1000.0 if self.telegram else 0.0
+                    logger.warning(f"TELEGRAM_DELIVERY_FAILED_TIMING pair={pair} engine={engine} telegram_duration_ms={telegram_duration_ms:.1f}")
                     self.telegram_delivery_failures += 1
                     try:
                         from database.repositories import release_signal_claim
