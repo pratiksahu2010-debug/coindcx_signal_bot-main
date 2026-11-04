@@ -68,12 +68,7 @@ def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min:
 def _normal_relative_volume_gate(
     indicators: Dict[str, Any], direction: str, min_rvol: float
 ) -> Dict[str, bool]:
-    """Require elevated completed-candle volume with a directional candle proxy.
-
-    CoinDCX OHLCV candles do not expose aggressor-side buy/sell volume. The
-    candle body direction is therefore used only as a transparent proxy for
-    directional participation; this is not exchange-reported taker volume.
-    """
+    """Use RVOL as the only Normal volume threshold; candle direction is not a gate."""
     try:
         rvol_value = float(indicators.get("rvol"))
         threshold = float(min_rvol)
