@@ -127,9 +127,9 @@ def test_normal_relative_volume_gate_requires_strength_and_direction():
     from core.engine import _normal_relative_volume_gate
 
     long_ok = {
-        "rvol": 1.3, "directional_volume_proxy_ok": True,
+        "rvol": 1.2, "directional_volume_proxy_ok": True,
     }
-    assert all(_normal_relative_volume_gate(long_ok, "LONG", 1.3).values())
+    assert all(_normal_relative_volume_gate(long_ok, "LONG", 1.2).values())
 
     short_ok = {
         "rvol": 1.6, "directional_volume_proxy_ok": True,
@@ -137,7 +137,7 @@ def test_normal_relative_volume_gate_requires_strength_and_direction():
     assert all(_normal_relative_volume_gate(short_ok, "SHORT", 1.3).values())
 
     weak_volume = _normal_relative_volume_gate(
-        {"rvol": 1.29, "directional_volume_proxy_ok": True}, "LONG", 1.3
+        {"rvol": 1.19, "directional_volume_proxy_ok": True}, "LONG", 1.2
     )
     assert weak_volume == {"relative_volume": False, "directional_volume": True}
 
