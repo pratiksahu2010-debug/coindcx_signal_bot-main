@@ -447,8 +447,7 @@ class SignalEngine:
                 f"STALE_CANDLE_SKIP {pair} engine={engine} candle_open_ms={candle_ts} "
                 f"candle_close_ms={candle_close_ms} age_seconds={initial_age:.1f} "
                 f"max_age_seconds={settings.max_signal_age_seconds}"
-            )
-            return
+            )            return
 
         # Indicators
         ema9 = ema(close, 9)
@@ -672,15 +671,33 @@ class SignalEngine:
             )
             volume_failed = [name for name, passed in volume_gates.items() if not passed]
             if volume_failed:
+                # Do not discard an otherwise-qualified Normal setup for weak
+                # participation. Keep it visible and re-evaluate on each new
+                # completed candle until RVOL reaches the configured 1.2x floor.
                 self._log_candle_evaluation(
                     pair, engine, direction, candle_ts, candle_close_ms,
-                    confirm_candle_time_ms, indicators, "REJECT",
+                    confirm_candle_time_ms, indicators, "WATCHLIST",
                     failed=volume_failed, strategy=strategy,
                 )
+                self.watchlists["normal"].add({
+                    "pair": pair, "display": self.symbols.display_name(pair),
+                    "direction": direction, "engine": "normal",
+                    "strategy": strategy, "score": 0.0,
+                    "grade": "WATCHLIST", "price": float(close[-1]),
+                    "indicators": {
+                        k: (round(v, 4) if isinstance(v, (float, np.floating)) else v)
+                        for k, v in indicators.items() if v is not None
+                    },
+                    "watch_reason": "WAITING_FOR_RVOL_1_2",
+                    "timestamp": utc_iso(utc_now()),
+                })
+                self._last_processed.setdefault(engine, {})[pair] = candle_ts
                 logger.info(
-                    f"NORMAL_RELATIVE_VOLUME_REJECT pair={pair} direction={direction} "
+                    f"NORMAL_RVOL_WATCHLIST pair={pair} direction={direction} "
                     f"rvol={indicators.get('rvol')} min_rvol={settings.normal_rvol_min} "
-                    f"directional_proxy_ok={indicators.get('directional_volume_proxy_ok')}"
+                    f"failed={','.join(volume_failed)} "
+                    f"directional_proxy_ok={indicators.get('directional_volume_proxy_ok')} "
+                    "action=WAIT_FOR_NEXT_COMPLETED_CANDLE"
                 )
                 return
             # Keep anti-chasing as a separate entry-safety rule, not an eighth
@@ -897,8 +914,7 @@ class SignalEngine:
                 "entry": risk.entry,
                 "entry_zone": [risk.entry_zone_low, risk.entry_zone_high],
                 "stop_loss": risk.stop_loss,
-                "tp1": risk.tp1,
-                "tp2": risk.tp2,
+                "tp1": risk.tp1,                "tp2": risk.tp2,
                 "tp3": risk.tp3,
                 "risk_pct": risk.risk_pct,
                 "rr": [risk.rr1, risk.rr2, risk.rr3],
