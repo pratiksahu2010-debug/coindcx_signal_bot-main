@@ -43,6 +43,14 @@ class WatchlistManager:
             return True
         return False
 
+    def remove_pair(self, pair: str, engine: str) -> int:
+        """Remove all directional watch entries for a pair in one engine."""
+        prefix = f"{pair}:{engine}:"
+        keys = [key for key in self._entries if key.startswith(prefix)]
+        for key in keys:
+            del self._entries[key]
+        return len(keys)
+
     def get(self, pair: str, engine: str, direction: str) -> Optional[dict]:
         key = self._key(pair, engine, direction)
         entry = self._entries.get(key)

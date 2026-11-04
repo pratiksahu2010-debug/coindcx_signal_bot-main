@@ -609,6 +609,8 @@ class SignalEngine:
                 direction = "SHORT"
 
         if not direction:
+            if engine == "normal":
+                self.watchlists["normal"].remove_pair(pair, "normal")
             logger.info(
                 f"CANDLE_EVAL pair={pair} engine={engine} direction=NONE "
                 f"decision=REJECT reason=direction_alignment "
@@ -659,6 +661,9 @@ class SignalEngine:
             gates = _normal_threshold_gates(indicators, direction, settings.normal_adx_min)
             failed = [name for name, passed in gates.items() if not passed]
             if failed:
+                # A previously watched setup is no longer valid once one of the
+                # five core Normal conditions fails.
+                self.watchlists["normal"].remove_pair(pair, "normal")
                 self._log_candle_evaluation(
                     pair, engine, direction, candle_ts, candle_close_ms,
                     confirm_candle_time_ms, indicators, "REJECT", failed=failed,
@@ -680,15 +685,23 @@ class SignalEngine:
                     confirm_candle_time_ms, indicators, "WATCHLIST",
                     failed=volume_failed, strategy=strategy,
                 )
+                # Replace any prior opposite-direction watch entry; only the
+                # latest qualified direction should remain visible for this pair.
+                self.watchlists["normal"].remove_pair(pair, "normal")
+                watch_score = self.normal_scoring.score_normal(indicators, direction)
                 self.watchlists["normal"].add({
                     "pair": pair, "display": self.symbols.display_name(pair),
                     "direction": direction, "engine": "normal",
-                    "strategy": strategy, "score": 0.0,
+                    "strategy": strategy, "score": watch_score.total,
                     "grade": "WATCHLIST", "price": float(close[-1]),
                     "indicators": {
                         k: (round(v, 4) if isinstance(v, (float, np.floating)) else v)
                         for k, v in indicators.items() if v is not None
                     },
+                    "components": [
+                        {"name": item.name, "points": item.points, "max": item.max_points}
+                        for item in watch_score.components
+                    ],
                     "watch_reason": "WAITING_FOR_RVOL_1_2",
                     "timestamp": utc_iso(utc_now()),
                 })
@@ -701,6 +714,9 @@ class SignalEngine:
                     "action=WAIT_FOR_NEXT_COMPLETED_CANDLE"
                 )
                 return
+            # RVOL has recovered and directional participation agrees. Remove
+            # the waiting entry before continuing through entry/risk validation.
+            self.watchlists["normal"].remove_pair(pair, "normal")
             # Keep anti-chasing as a separate entry-safety rule, not an eighth
             # indicator threshold.
             if not indicators["not_chasing"]:
