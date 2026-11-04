@@ -609,6 +609,8 @@ class SignalEngine:
                 direction = "SHORT"
 
         if not direction:
+            if engine == "normal":
+                self.watchlists["normal"].remove_pair(pair, "normal")
             logger.info(
                 f"CANDLE_EVAL pair={pair} engine={engine} direction=NONE "
                 f"decision=REJECT reason=direction_alignment "
@@ -659,6 +661,9 @@ class SignalEngine:
             gates = _normal_threshold_gates(indicators, direction, settings.normal_adx_min)
             failed = [name for name, passed in gates.items() if not passed]
             if failed:
+                # A previously watched setup is no longer valid once one of the
+                # five core Normal conditions fails.
+                self.watchlists["normal"].remove_pair(pair, "normal")
                 self._log_candle_evaluation(
                     pair, engine, direction, candle_ts, candle_close_ms,
                     confirm_candle_time_ms, indicators, "REJECT", failed=failed,
@@ -701,6 +706,9 @@ class SignalEngine:
                     "action=WAIT_FOR_NEXT_COMPLETED_CANDLE"
                 )
                 return
+            # RVOL has recovered and directional participation agrees. Remove
+            # the waiting entry before continuing through entry/risk validation.
+            self.watchlists["normal"].remove_pair(pair, "normal")
             # Keep anti-chasing as a separate entry-safety rule, not an eighth
             # indicator threshold.
             if not indicators["not_chasing"]:
