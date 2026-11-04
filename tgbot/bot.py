@@ -3,6 +3,7 @@ from typing import Optional, List, Any, Dict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import re
+import time
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
@@ -253,7 +254,7 @@ class TelegramBot:
         text = self.format_signal(signal)
         success_count = 0
         for chat_id in self.admin_ids:
-            recipient_started = __import__('time').perf_counter()
+            recipient_started = time.perf_counter()
             try:
                 await self.bot.send_message(
                     chat_id=chat_id,
