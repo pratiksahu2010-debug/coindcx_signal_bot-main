@@ -24,7 +24,11 @@ class CoinDCXFuturesStream:
             logger=False,
             engineio_logger=False,
         )
+        # Desired subscriptions survive transport disconnects. The subscribed
+        # set is connection-local and is cleared whenever Socket.IO disconnects.
         self._channels = set()
+        self._subscribed_channels = set()
+        self._subscription_lock = asyncio.Lock()
         self._running = False
         self._connected = False
         self._last_event_ms: Optional[int] = None
@@ -38,12 +42,20 @@ class CoinDCXFuturesStream:
         @self.client.event
         async def connect():
             self._connected = True
-            logger.info(f"COINDCX_WS_CONNECTED price_cache_pairs={len(self.rest._ws_prices) if self.rest else 0}")
+            await self._subscribe_channels()
+            logger.info(
+                f"COINDCX_WS_CONNECTED price_cache_pairs={len(self.rest._ws_prices) if self.rest else 0} "
+                f"desired_channels={len(self._channels)} "
+                f"subscribed_channels={len(self._subscribed_channels)}"
+            )
 
         @self.client.event
         async def disconnect():
             self._connected = False
-            logger.warning("COINDCX_WS_DISCONNECTED REST_fallback=true")
+            # The server drops all channel memberships with the transport.
+            # Keep desired channels so the next connect event can restore them.
+            self._subscribed_channels.clear()
+            logger.warning("COINDCX_WS_DISCONNECTED subscriptions_cleared=true REST_fallback=true")
 
         @self.client.on("candlestick")
         async def on_candlestick(message):
@@ -52,6 +64,29 @@ class CoinDCXFuturesStream:
         @self.client.on("currentPrices@futures#update")
         async def on_prices(message):
             self._handle_prices(message)
+
+    async def _subscribe_channels(self) -> int:
+        """Join every desired channel once on the current Socket.IO connection."""
+        if not self._running or not self.client.connected:
+            return 0
+        joined = 0
+        failed = []
+        async with self._subscription_lock:
+            pending = sorted(self._channels - self._subscribed_channels)
+            for channel in pending:
+                try:
+                    await self.client.emit("join", {"channelName": channel})
+                except Exception as exc:
+                    failed.append(channel)
+                    logger.warning(f"COINDCX_WS_SUBSCRIBE_FAILED channel={channel} error={exc}")
+                    continue
+                self._subscribed_channels.add(channel)
+                joined += 1
+        logger.info(
+            f"COINDCX_WS_SUBSCRIPTION_STATE desired={len(self._channels)} "
+            f"active={len(self._subscribed_channels)} joined_now={joined} failed={len(failed)}"
+        )
+        return joined
 
     def _handle_prices(self, message: Any) -> None:
         """Consume the documented currentPrices@futures#update event safely."""
@@ -138,21 +173,24 @@ class CoinDCXFuturesStream:
             logger.info("COINDCX_WS_DISABLED ENABLE_WEBSOCKET=false REST_fallback=true")
             return False
         self._running = True
+        # Build the complete desired set before connecting. The connect handler
+        # performs the joins on both the initial connection and every reconnect.
+        self._channels = {"currentPrices@futures@rt"}
+        for pair in sorted(set(pairs)):
+            for interval in ("5m", "15m"):
+                self._channels.add(f"{pair}_{interval}-futures")
         try:
             await self.client.connect(
                 settings.coindcx_ws_url,
                 transports=["websocket"],
             )
-            # A single public futures price channel provides live LTP for the universe.
-            await self.client.emit("join", {"channelName": "currentPrices@futures@rt"})
-            self._channels.add("currentPrices@futures@1s")
-            # CoinDCX Futures public candle channel naming per API docs.
-            for pair in sorted(set(pairs)):
-                for interval in ("5m", "15m"):
-                    channel = f"{pair}_{interval}-futures"
-                    await self.client.emit("join", {"channelName": channel})
-                    self._channels.add(channel)
-            logger.info(f"COINDCX_WS_SUBSCRIBE_SENT channels={len(self._channels)} price_channel=currentPrices@futures@rt ack_protocol=not_confirmed")
+            # Some test doubles and alternate transports do not dispatch the
+            # connect callback; this idempotent call also verifies initial joins.
+            await self._subscribe_channels()
+            logger.info(
+                f"COINDCX_WS_SUBSCRIBE_SENT desired={len(self._channels)} "
+                f"active={len(self._subscribed_channels)}"
+            )
             return True
         except Exception as exc:
             logger.warning(f"COINDCX_WS_START_FAILED REST_fallback=true error={exc}")
@@ -162,13 +200,14 @@ class CoinDCXFuturesStream:
     async def stop(self) -> None:
         self._running = False
         if self.client.connected:
-            for channel in tuple(self._channels):
+            for channel in tuple(self._subscribed_channels):
                 try:
                     await self.client.emit("leave", {"channelName": channel})
                 except Exception:
                     pass
             await self.client.disconnect()
         self._channels.clear()
+        self._subscribed_channels.clear()
         self._connected = False
 
     @property
