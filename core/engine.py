@@ -559,11 +559,6 @@ class SignalEngine:
             "body_ratio": body_ratio, "close_location": close_location,
             "upper_wick_ratio": upper_wick, "lower_wick_ratio": lower_wick,
             "rsi_prev": rsi(close[:-1],14),
-            # OHLCV-only directional participation proxy; not true aggressor volume.
-            "directional_volume_proxy_ok": bool(
-                (direction == "LONG" and signed_body > 0) or
-                (direction == "SHORT" and signed_body < 0)
-            ),
         }
 
         # ORB owns a fixed 5-minute Futures feed, independent of the configurable
@@ -622,6 +617,12 @@ class SignalEngine:
                 f"body={signed_body:.8g}"
             )
             return
+        # CoinDCX OHLCV does not expose aggressor-side buy/sell volume.
+        # Use completed candle body direction as an explicit participation proxy.
+        indicators["directional_volume_proxy_ok"] = bool(
+            (direction == "LONG" and signed_body > 0) or
+            (direction == "SHORT" and signed_body < 0)
+        )
         indicators["macd_direction_ok"] = bool(
             macd_hist is not None and (
                 (direction == "LONG" and macd_hist > 0) or
