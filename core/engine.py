@@ -447,7 +447,8 @@ class SignalEngine:
                 f"STALE_CANDLE_SKIP {pair} engine={engine} candle_open_ms={candle_ts} "
                 f"candle_close_ms={candle_close_ms} age_seconds={initial_age:.1f} "
                 f"max_age_seconds={settings.max_signal_age_seconds}"
-            )            return
+            )
+            return
 
         # Indicators
         ema9 = ema(close, 9)
