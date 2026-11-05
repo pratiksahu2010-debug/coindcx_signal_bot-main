@@ -205,7 +205,7 @@ class TelegramBot:
                 "",
                 "<i>Signal only — no automated trading.</i>",
             ]
-            return "\\n".join(rows)
+            return "\n".join(rows)
 
         rows = [
             f"{dot} <b>{safe(pair)} — {side} SIGNAL</b>",
@@ -268,7 +268,7 @@ class TelegramBot:
             "",
             "<i>Signal only — no automated trading.</i>",
         ]
-        return "\\n".join(rows)
+        return "\n".join(rows)
 
     async def send_signal(self, signal: Dict[str, Any]) -> bool:
         """Push a signal to configured admins; return True if at least one delivery succeeds."""
