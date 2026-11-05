@@ -137,111 +137,138 @@ class TelegramBot:
         await update.message.reply_text("Active signals are pushed live when generated.")
 
     def format_signal(self, signal: Dict[str, Any]) -> str:
-        """Plain-text friendly format (no Markdown parse issues)."""
+        """Format alerts as compact HTML with prominent symbol, side, prices and IST times."""
+        from html import escape
+
+        def safe(value: Any) -> str:
+            return escape(str(value if value is not None else "n/a"), quote=False)
+
+        def stamp(value: Any) -> str:
+            if not value:
+                return "n/a"
+            try:
+                raw = str(value).strip()
+                dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %I:%M:%S %p IST")
+            except (TypeError, ValueError, OverflowError):
+                return "n/a"
+
         risk = signal.get("risk") or {}
         ind = signal.get("indicators") or {}
-        direction = signal.get("direction", "")
-        emoji = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
-        grade = signal.get("grade", "")
+        direction = str(signal.get("direction", "")).upper()
+        is_long = direction == "LONG"
+        dot = "🟢" if is_long else "🔴"
+        side = "LONG" if is_long else "SHORT"
+        pair = signal.get("display") or signal.get("pair", "UNKNOWN")
+        engine = str(signal.get("engine") or "").upper()
+        strategy = signal.get("strategy", "n/a")
         score = signal.get("score", 0)
-        pair = signal.get("display") or signal.get("pair", "")
-        strategy = signal.get("strategy", "")
-        engine = (signal.get("engine") or "").upper()
+        grade = signal.get("grade", "")
         price = signal.get("price")
 
+        # Keep the alternate sequential-signal engine readable and include IST.
         if engine == "SIGNALS":
             step = signal.get("step") or {}
             context = signal.get("context_15m") or {}
             quality = signal.get("quality") or {}
-            ind = signal.get("indicators") or {}
-            risk = signal.get("risk") or {}
-            side = "🟢 CONFIRMED LONG SIGNAL" if direction == "LONG" else "🔴 CONFIRMED SHORT SIGNAL"
-            def stamp(value, ist=False):
-                try:
-                    dt = datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc)
-                    return dt.astimezone(ZoneInfo("Asia/Kolkata")).isoformat() if ist else dt.isoformat()
-                except (TypeError, ValueError, OverflowError):
-                    return "n/a"
+            candle_utc = signal.get("candle_time_ms")
+            try:
+                candle_dt = datetime.fromtimestamp(int(candle_utc) / 1000, tz=timezone.utc)
+                candle_ist = candle_dt.astimezone(ZoneInfo("Asia/Kolkata")).strftime("%d-%b-%Y %I:%M:%S %p IST")
+                candle_utc_text = candle_dt.isoformat()
+            except (TypeError, ValueError, OverflowError, OSError):
+                candle_ist = candle_utc_text = "n/a"
             rows = [
-                side, "", f"Symbol: {pair}", "Exchange: CoinDCX", "Strategy: Sequential EMA 9/21 + Step Channel",
-                "Timeframe: 5m", f"Candle UTC: {stamp(signal.get('candle_time_ms'))}",
-                f"Candle IST: {stamp(signal.get('candle_time_ms'), ist=True)}",
-                "", "ENTRY CONFIRMATIONS:",
-                f"EMA 9: {_num(ind.get('ema9'))}", f"EMA 21: {_num(ind.get('ema21'))}",
-                f"EMA crossover UTC: {stamp(signal.get('cross_time_ms'))}",
-                f"Crossover age: {signal.get('cross_age_bars', 'n/a')} completed candle(s)",
-                f"VWAP: {_num(ind.get('vwap'))}", f"Price vs VWAP: {'ABOVE' if direction == 'LONG' else 'BELOW'}", f"VWAP rising: {ind.get('vwap_rising', False)}", f"RSI(14): {_num(ind.get('rsi'), 2)}",
-                f"ADX(14): {_num(ind.get('adx'), 2)}", f"ADX rising: {ind.get('adx_rising', False)}", f"+DI: {_num(ind.get('plus_di'), 2)}",
-                f"-DI: {_num(ind.get('minus_di'), 2)}",
-                "", "STEP CHANNEL:",
-                f"Direction: {step.get('direction', 'UNKNOWN')}", f"Step Event: {step.get('event', 'n/a')}", f"Step ATR: {_num(step.get('step_atr'))}",
-                f"MID: {_num(step.get('mid'))}", f"IN+: {_num(step.get('in_plus'))}",
-                f"IN-: {_num(step.get('in_minus'))}", f"OUT+: {_num(step.get('out_plus'))}",
-                f"OUT-: {_num(step.get('out_minus'))}",
-                "", "15M CONTEXT:",
-                f"{context.get('state', 'UNAVAILABLE')} — {context.get('alignment', 'UNAVAILABLE')}",
-                "15M ROLE: INFORMATIONAL ONLY",
-                "", "TRADE LEVELS:", f"Entry: {_num(risk.get('entry'))}",
-                f"Stop Loss: {_num(risk.get('stop_loss'))}", f"Target 1: {_num(risk.get('tp1'))}",
-                f"Target 2: {_num(risk.get('tp2'))}",
-                f"Risk/Reward: {_num((risk.get('rr') or [None])[0], 2)}R / {_num((risk.get('rr') or [None, None])[1], 2)}R",
-                "", "QUALITY:",
-                f"Candle body ratio: {_num(quality.get('body_ratio'), 2)}",
-                f"Volume status: {quality.get('volume_status', 'UNAVAILABLE')}", f"Relative volume: {_num(quality.get('rvol'), 2)}",
-                f"VWAP extension: {_num(quality.get('vwap_extension_atr'), 2)} ATR",
-                f"Channel extension: {_num(quality.get('channel_extension_atr'), 2)} ATR",
-                f"Confirmation: {', '.join(quality.get('checklist') or [])}",
-                f"Signal age: {signal.get('signal_age_seconds', 'n/a')} seconds",
-                "", "Signal only — no automated trading.",
+                f"{dot} <b>{safe(pair)} — {side} SIGNAL</b>",
+                f"<b>ENGINE:</b> SEQUENTIAL",
+                f"<b>STRATEGY:</b> {safe(strategy)}",
+                f"<b>TIMEFRAME:</b> 5M | <b>CONFIRM:</b> 15M",
+                f"<b>CANDLE TIME (IST):</b> {safe(candle_ist)}",
+                f"<b>CANDLE TIME (UTC):</b> {safe(candle_utc_text)}",
+                "",
+                "<b>ENTRY CONFIRMATIONS</b>",
+                f"<b>EMA 9:</b> {safe(_num(ind.get('ema9')))} | <b>EMA 21:</b> {safe(_num(ind.get('ema21')))}",
+                f"<b>VWAP:</b> {safe(_num(ind.get('vwap')))}",
+                f"<b>RSI:</b> {safe(_num(ind.get('rsi'), 2))} | <b>ADX:</b> {safe(_num(ind.get('adx'), 2))}",
+                f"<b>+DI:</b> {safe(_num(ind.get('plus_di'), 2))} | <b>-DI:</b> {safe(_num(ind.get('minus_di'), 2))}",
+                "",
+                "<b>TRADE LEVELS</b>",
+                f"<b>ENTRY:</b> {safe(_num(risk.get('entry')))}",
+                f"<b>STOP LOSS:</b> {safe(_num(risk.get('stop_loss')))}",
+                f"<b>TP1:</b> {safe(_num(risk.get('tp1')))} | <b>TP2:</b> {safe(_num(risk.get('tp2')))}",
+                f"<b>STEP EVENT:</b> {safe(step.get('event', 'n/a'))}",
+                f"<b>15M CONTEXT:</b> {safe(context.get('state', 'UNAVAILABLE'))}",
+                f"<b>RVOL:</b> {safe(_num(quality.get('rvol'), 2))}",
+                f"<b>SIGNAL AGE:</b> {safe(signal.get('signal_age_seconds', 'n/a'))} seconds",
+                "",
+                "<i>Signal only — no automated trading.</i>",
             ]
-            return "\n".join(rows)
+            return "\\n".join(rows)
 
-        lines = [
-            "🚀 COINDCX SIGNAL BOT",
-            "",
-            f"PAIR: {pair}",
-            f"SIGNAL: {emoji}",
-            f"ENGINE: {engine}",
-            f"STRATEGY: {strategy}",
-            f"SCORE: {score}/10 — {grade}",
+        rows = [
+            f"{dot} <b>{safe(pair)} — {side} SIGNAL</b>",
+            f"<b>ENGINE:</b> {safe(engine or 'n/a')}",
+            f"<b>STRATEGY:</b> {safe(strategy)}",
+            f"<b>SCORE:</b> {safe(score)}/10 — <b>{safe(grade)}</b>",
             "",
         ]
 
         if risk:
             ez = risk.get("entry_zone") or [risk.get("entry"), risk.get("entry")]
             rr = risk.get("rr") or [0, 0, 0]
-            lines += [
-                f"ENTRY: {_num(risk.get('entry'))}",
-                f"LIVE PRICE CHECK: {_num(signal.get('live_price'))}",
-                f"ENTRY CHECKED UTC: {signal.get('entry_checked_at', 'n/a')}",
-                f"ENTRY ZONE: {_num(ez[0])} – {_num(ez[1])}",
-                f"STOP LOSS: {_num(risk.get('stop_loss'))}",
-                f"TP1: {_num(risk.get('tp1'))}",
-                f"TP2: {_num(risk.get('tp2'))}",
-                f"TP3: {_num(risk.get('tp3'))}",
-                f"RISK: {_num(risk.get('risk_pct'), 2)}%",
-                f"R:R: 1:{_num(rr[0], 2)} / 1:{_num(rr[1], 2)} / 1:{_num(rr[2], 2)}",
+            rows += [
+                "<b>TRADE LEVELS</b>",
+                f"<b>ENTRY:</b> {safe(_num(risk.get('entry')))}",
+                f"<b>LIVE PRICE CHECK:</b> {safe(_num(signal.get('live_price')))}",
+                f"<b>ENTRY CHECKED (IST):</b> {safe(stamp(signal.get('entry_checked_at')))}",
+                f"<b>ENTRY ZONE:</b> {safe(_num(ez[0]))} – {safe(_num(ez[1]))}",
+                f"<b>STOP LOSS:</b> {safe(_num(risk.get('stop_loss')))}",
+                f"<b>TP1:</b> {safe(_num(risk.get('tp1')))}",
+                f"<b>TP2:</b> {safe(_num(risk.get('tp2')))}",
+                f"<b>TP3:</b> {safe(_num(risk.get('tp3')))}",
+                f"<b>RISK:</b> {safe(_num(risk.get('risk_pct'), 2))}%",
+                f"<b>R:R:</b> 1:{safe(_num(rr[0], 2))} / 1:{safe(_num(rr[1], 2))} / 1:{safe(_num(rr[2], 2))}",
                 "",
             ]
         else:
-            lines.append(f"PRICE: {_num(price)}")
-            lines.append("")
+            rows += [f"<b>PRICE:</b> {safe(_num(price))}", ""]
 
-        lines += [
-            "TIMEFRAME: 5M | CONFIRM: 15M",
-            f"EMA 9/21: {_num(ind.get('ema9'))} / {_num(ind.get('ema21'))}",
-            f"RSI: {_num(ind.get('rsi'), 2)} | ADX: {_num(ind.get('adx'), 2)}",
-            f"ATR%: {_num(ind.get('atr_pct'), 3)} | RVOL: {_num(ind.get('rvol'), 2)}",
-            f"MACD hist: {_num(ind.get('macd_hist'))}",
-            f"CANDLE OPEN UTC: {datetime.fromtimestamp(signal['candle_time_ms'] / 1000, tz=timezone.utc).isoformat() if signal.get('candle_time_ms') else 'n/a'}",
-            f"CANDLE CLOSE UTC: {datetime.fromtimestamp(signal['candle_close_time_ms'] / 1000, tz=timezone.utc).isoformat() if signal.get('candle_close_time_ms') else 'n/a'}",
-            f"15M CONTEXT OPEN UTC: {datetime.fromtimestamp(signal['confirm_candle_time_ms'] / 1000, tz=timezone.utc).isoformat() if signal.get('confirm_candle_time_ms') else 'n/a'}",
-            f"SIGNAL AGE AT GENERATION: {signal.get('signal_age_seconds', 'n/a')} seconds",
+        candle_open = signal.get("candle_time_ms")
+        candle_close = signal.get("candle_close_time_ms")
+        context_open = signal.get("confirm_candle_time_ms")
+
+        def ms_stamp(value: Any, ist: bool = False) -> str:
+            try:
+                dt = datetime.fromtimestamp(int(value) / 1000, tz=timezone.utc)
+                if ist:
+                    dt = dt.astimezone(ZoneInfo("Asia/Kolkata"))
+                return dt.strftime("%d-%b-%Y %I:%M:%S %p") + (" IST" if ist else " UTC")
+            except (TypeError, ValueError, OverflowError, OSError):
+                return "n/a"
+
+        rows += [
+            "<b>MARKET INDICATORS</b>",
+            f"<b>TIMEFRAME:</b> 5M | <b>CONFIRM:</b> 15M",
+            f"<b>EMA 9/21:</b> {safe(_num(ind.get('ema9')))} / {safe(_num(ind.get('ema21')))}",
+            f"<b>RSI:</b> {safe(_num(ind.get('rsi'), 2))} | <b>ADX:</b> {safe(_num(ind.get('adx'), 2))}",
+            f"<b>ATR%:</b> {safe(_num(ind.get('atr_pct'), 3))} | <b>RVOL:</b> {safe(_num(ind.get('rvol'), 2))}",
+            f"<b>MACD HIST:</b> {safe(_num(ind.get('macd_hist')))}",
             "",
-            "Signal only — no automated trading.",
-            f"SIGNAL GENERATED UTC: {signal.get('timestamp', '')}",
+            "<b>CANDLE TIMING</b>",
+            f"<b>CANDLE OPEN:</b> {safe(ms_stamp(candle_open))}",
+            f"<b>CANDLE OPEN (IST):</b> {safe(ms_stamp(candle_open, True))}",
+            f"<b>CANDLE CLOSE:</b> {safe(ms_stamp(candle_close))}",
+            f"<b>CANDLE CLOSE (IST):</b> {safe(ms_stamp(candle_close, True))}",
+            f"<b>15M CONTEXT OPEN (IST):</b> {safe(ms_stamp(context_open, True))}",
+            f"<b>ENTRY CHECKED (IST):</b> {safe(stamp(signal.get('entry_checked_at')))}",
+            f"<b>SIGNAL GENERATED (IST):</b> {safe(stamp(signal.get('timestamp')))}",
+            f"<b>SIGNAL AGE:</b> {safe(signal.get('signal_age_seconds', 'n/a'))} seconds",
+            "",
+            "<i>Signal only — no automated trading.</i>",
         ]
-        return "\n".join(lines)
+        return "\\n".join(rows)
 
     async def send_signal(self, signal: Dict[str, Any]) -> bool:
         """Push a signal to configured admins; return True if at least one delivery succeeds."""
@@ -259,7 +286,7 @@ class TelegramBot:
                 await self.bot.send_message(
                     chat_id=chat_id,
                     text=text,
-                    parse_mode=None,
+                    parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
                 success_count += 1
