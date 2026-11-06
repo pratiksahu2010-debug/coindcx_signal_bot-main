@@ -186,6 +186,90 @@ class ScoringEngine:
         total = sum(c.points for c in comps)
         return ScoreResult(total=round(total, 2), components=comps, direction=direction)
 
+    def score_momentum_explosion(self, indicators: Dict[str, Any], direction: str) -> ScoreResult:
+        """Score an already-qualified early ignition without demanding lagging confirmation.
+
+        The detector has already enforced minimum ATR expansion, RVOL, candle body,
+        close location, extension and one valid ignition pattern. Those core
+        conditions receive the 7-point baseline; additional structure/squeeze/
+        bandwidth/trend evidence improves the grade rather than vetoing ignition.
+        """
+        is_long = direction == "LONG"
+        components: List[ScoreComponent] = []
+
+        structure = bool(indicators.get("structure_break"))
+        squeeze = bool(indicators.get("squeeze_release"))
+        bandwidth_expanding = bool(indicators.get("bw_expand"))
+        ema_aligned = bool(indicators.get("ema_aligned"))
+        roc_aligned = bool(indicators.get("roc_direction_ok"))
+        macd_accel = bool(indicators.get("macd_accel"))
+        ignition = structure or squeeze or (
+            bandwidth_expanding and (roc_aligned or macd_accel)
+        ) or (
+            ema_aligned and roc_aligned and (
+                indicators.get("rsi_accel") or indicators.get("macd_direction_ok") or macd_accel
+            )
+        ) or (
+            float(indicators.get("rvol") or 0.0) >= 1.80
+            and roc_aligned
+        )
+
+        components.append(ScoreComponent(
+            "Ignition Evidence", 2.0 if ignition else 0.0, 2.0, ignition,
+            direction, "Valid early ignition pattern" if ignition else "No ignition pattern", ignition
+        ))
+
+        atr_expansion = float(indicators.get("atr_expansion") or 0.0)
+        components.append(ScoreComponent(
+            "ATR Expansion", 1.5 if atr_expansion >= 1.08 else 0.0, 1.5,
+            atr_expansion, direction, f"ATR expansion {atr_expansion:.2f}x", atr_expansion >= 1.08
+        ))
+
+        rvol = float(indicators.get("rvol") or 0.0)
+        components.append(ScoreComponent(
+            "Relative Volume", 1.5 if rvol >= 1.30 else 0.0, 1.5,
+            rvol, direction, f"RVOL {rvol:.2f}x", rvol >= 1.30
+        ))
+
+        body = float(indicators.get("body_ratio") or 0.0)
+        components.append(ScoreComponent(
+            "Candle Body", 1.25 if body >= 0.45 else 0.0, 1.25,
+            body, direction, f"Body ratio {body:.2f}", body >= 0.45
+        ))
+
+        location = float(indicators.get("close_location", 0.5))
+        aligned_location = location if is_long else 1.0 - location
+        components.append(ScoreComponent(
+            "Directional Close", 0.75 if aligned_location >= 0.58 else 0.0, 0.75,
+            aligned_location, direction, f"Directional close {aligned_location:.2f}",
+            aligned_location >= 0.58
+        ))
+
+        components.append(ScoreComponent(
+            "Structure Bonus", 0.75 if structure else 0.0, 0.75,
+            structure, direction, "Swing structure broken" if structure else "No swing break", structure
+        ))
+        components.append(ScoreComponent(
+            "Squeeze Bonus", 0.75 if squeeze else 0.0, 0.75,
+            squeeze, direction, "Squeeze released" if squeeze else "No squeeze release", squeeze
+        ))
+        components.append(ScoreComponent(
+            "Bandwidth Expansion", 1.0 if bandwidth_expanding else 0.0, 1.0,
+            bandwidth_expanding, direction,
+            "Bollinger bandwidth expanding" if bandwidth_expanding else "Bandwidth not expanding",
+            bandwidth_expanding
+        ))
+        trend_confirmation = ema_aligned or roc_aligned or macd_accel
+        components.append(ScoreComponent(
+            "Early Trend Confirmation", 0.5 if trend_confirmation else 0.0, 0.5,
+            trend_confirmation, direction,
+            "EMA/ROC/MACD supports direction" if trend_confirmation else "Early trend confirmation absent",
+            trend_confirmation
+        ))
+
+        total = sum(component.points for component in components)
+        return ScoreResult(total=round(total, 2), components=components, direction=direction)
+
     def score_orb(self, indicators: Dict[str, Any], direction: str) -> ScoreResult:
         """Score ORB quality from its own range, participation and entry geometry."""
         is_long = direction == "LONG"
