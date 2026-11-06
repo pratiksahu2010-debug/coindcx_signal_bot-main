@@ -44,8 +44,18 @@ async def health(request: Request):
 
 @router.api_route("/ping", methods=["GET", "HEAD"], response_class=Response)
 async def ping() -> Response:
-    """Silent process-liveness endpoint for keep-alive requests only."""
-    return Response(status_code=204, headers={"Cache-Control": "no-store"})
+    """
+    No-op process liveness probe.
+
+    Deliberately does not inspect application state, touch the database,
+    call CoinDCX, scan markets, or send Telegram messages. Always returns
+    an empty HTTP 204 response for GET and HEAD keep-alive requests.
+    """
+    return Response(
+        content=b"",
+        status_code=204,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/status")
