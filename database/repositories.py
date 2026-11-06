@@ -45,7 +45,7 @@ async def load_active_signals(max_age_hours: int = 4) -> list:
     factory = database_db.SessionLocal
     if factory is None:
         return []
-    cutoff = datetime.utcnow() - timedelta(hours=max(1, int(max_age_hours)))
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=max(1, int(max_age_hours)))
     async with factory() as session:
         try:
             # Mark orphaned active rows older than the configured signal TTL.
@@ -177,7 +177,7 @@ async def save_pending_retest(key: str, pending: dict) -> bool:
     signal = pending.get("signal") or {}
     values = dict(key=key, pair=signal.get("pair", ""), engine=signal.get("engine", ""),
                   direction=signal.get("direction", ""), expires_at=expires,
-                  payload=json.dumps(pending, default=str), updated_at=datetime.utcnow())
+                  payload=json.dumps(pending, default=str), updated_at=datetime.now(timezone.utc).replace(tzinfo=None))
     async with factory() as session:
         try:
             statement = insert(PendingRetestRecord).values(**values)
@@ -196,14 +196,14 @@ async def save_pending_retest(key: str, pending: dict) -> bool:
 async def load_pending_retests(limit: int = 500) -> list:
     """Restore only valid, unexpired pending retests."""
     import json
-    from datetime import datetime
+    from datetime import datetime, timezone
     from sqlalchemy import select, delete
     from database import db as database_db
     from database.models import PendingRetestRecord
     factory = database_db.SessionLocal
     if factory is None:
         return []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     async with factory() as session:
         try:
             await session.execute(delete(PendingRetestRecord).where(PendingRetestRecord.expires_at <= now))
@@ -248,7 +248,7 @@ async def delete_pending_retest(key: str) -> bool:
 async def record_signal_outcome(signal: dict, latest_price: float, outcome: str = "ACTIVE") -> bool:
     """Persist MFE/MAE and lifecycle outcome for one delivered signal."""
     import json
-    from datetime import datetime
+    from datetime import datetime, timezone
     from sqlalchemy import select
     from database import db as database_db
     from database.models import SignalOutcomeRecord
@@ -261,7 +261,7 @@ async def record_signal_outcome(signal: dict, latest_price: float, outcome: str 
     direction = signal.get("direction")
     move = ((latest_price / entry) - 1.0) * 100.0 * (1 if direction == "LONG" else -1)
     key = f"{signal.get('pair')}:{signal.get('engine')}:{direction}:{signal.get('candle_time_ms', signal.get('timestamp', ''))}"
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     async with factory() as session:
         try:
             row = await session.get(SignalOutcomeRecord, None) if False else None
@@ -291,7 +291,7 @@ async def record_signal_outcome(signal: dict, latest_price: float, outcome: str 
 
 async def signal_performance_report(days: int = 30) -> dict:
     """Summarize durable outcomes by engine and strategy."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from sqlalchemy import select
     from collections import defaultdict
     from database import db as database_db
@@ -301,7 +301,7 @@ async def signal_performance_report(days: int = 30) -> dict:
         return {"available": False, "groups": {}}
     async with factory() as session:
         result = await session.execute(select(SignalOutcomeRecord).where(
-            SignalOutcomeRecord.created_at >= datetime.utcnow() - timedelta(days=max(1, min(days, 365)))))
+            SignalOutcomeRecord.created_at >= datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=max(1, min(days, 365)))))
         rows = result.scalars().all()
     groups = defaultdict(list)
     for row in rows:
