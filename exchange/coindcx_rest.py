@@ -166,7 +166,7 @@ class CoinDCXRest:
             "mark_price": quote.get("mp") or quote.get("mark_price"),
             "timestamp": timestamp,
             "timestamp_source": "row" if row_ts is not None else ("root" if fallback_ts is not None else "missing"),
-            "quote_volume": quote.get("qv") or quote.get("quote_volume") or quote.get("quoteVolume") or 0,
+            "quote_volume": quote.get("quote_volume") or quote.get("quoteVolume") or 0,
             "base_volume": quote.get("v") or quote.get("bv") or quote.get("base_volume") or quote.get("volume") or 0,
         }
 
