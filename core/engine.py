@@ -1216,64 +1216,37 @@ class SignalEngine:
                     signal["entry_checked_at"] = utc_iso(utc_now())
                     signal["signal_age_seconds"] = round(delivery_age, 1)
                     signal["timestamp"] = utc_iso(utc_now())
-                # Only start cooldown after Telegram confirms at least one delivery.
-                # A transient Telegram outage must not suppress this market for 30 minutes.
-                delivered = False
-                if self.telegram:
-                    logger.info(
-                        f"TELEGRAM_DELIVERY_ATTEMPT pair={pair} engine={engine} "
-                        f"direction={direction} candle_open_ms={candle_ts}"
-                    )
-                    telegram_started = asyncio.get_running_loop().time()
-                    try:
-                        delivered = bool(await self.telegram.send_signal(signal))
-                    except Exception as e:
-                        logger.error(f"Telegram send error: {e}")
-                if delivered:
-                    telegram_duration_ms = (asyncio.get_running_loop().time() - telegram_started) * 1000.0 if self.telegram else 0.0
-                    end_to_end_age = candle_age_seconds(int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms)
-                    logger.info(
-                        f"TELEGRAM_DELIVERY_CONFIRMED pair={pair} engine={engine} "
-                        f"telegram_duration_ms={telegram_duration_ms:.1f} "
-                        f"candle_close_to_confirmation_seconds={end_to_end_age:.1f}"
-                    )
+                # Queue durable per-recipient deliveries. The background worker
+                # retries transient Telegram errors while the original entry window remains valid.
+                queued = await self._queue_telegram_signal(signal)
+                if queued:
                     self.cooldowns[engine].set(pair, engine, direction)
                     logger.info(
-                        f"SIGNAL_DELIVERED {result.grade} {direction} {pair} "
-                        f"score={result.total} engine={engine} strategy={strategy} "
-                        f"candle_open_ms={candle_ts} candle_close_ms={candle_close_ms} "
-                        f"age_seconds={signal['signal_age_seconds']:.1f} "
-                        f"live_price={signal.get('live_price')} "
-                        f"confirm_15m_open_ms={signal.get('confirm_candle_time_ms')}"
+                        "SIGNAL_QUEUED %s %s %s score=%s age_seconds=%s",
+                        result.grade, direction, pair, result.total, signal.get("signal_age_seconds"),
                     )
                     persisted_signal = self.signals[engine].get(pair, engine, direction)
                     if persisted_signal:
                         try:
                             from database.repositories import save_signal, record_signal_outcome
                             if not await save_signal(persisted_signal):
-                                logger.error(f"ACTIVE_SIGNAL_PERSIST_FAILED {pair} engine={engine}")
-                            else:
-                                logger.info(
-                                    f"ACTIVE_SIGNAL_PERSISTED pair={pair} engine={engine} "
-                                    f"direction={direction} candle_open_ms={candle_ts}"
-                                )
-                            from database.repositories import record_signal_outcome
-                            await record_signal_outcome(persisted_signal, float(delivery_price), "ACTIVE")
+                                logger.error("ACTIVE_SIGNAL_PERSIST_FAILED %s engine=%s", pair, engine)
+                            await record_signal_outcome(
+                                persisted_signal, float(signal.get("live_price") or signal.get("price") or 0), "ACTIVE"
+                            )
                         except Exception as exc:
-                            logger.error(f"ACTIVE_SIGNAL_PERSIST_ERROR {pair}: {exc}")
+                            logger.error("ACTIVE_SIGNAL_PERSIST_ERROR %s: %s", pair, exc)
                 else:
-                    telegram_duration_ms = (asyncio.get_running_loop().time() - telegram_started) * 1000.0 if self.telegram else 0.0
-                    logger.warning(f"TELEGRAM_DELIVERY_FAILED_TIMING pair={pair} engine={engine} telegram_duration_ms={telegram_duration_ms:.1f}")
                     self.telegram_delivery_failures += 1
                     try:
                         from database.repositories import release_signal_claim
                         await release_signal_claim(signal, candle_ts)
                     except Exception as exc:
-                        logger.error(f"SIGNAL_CLAIM_RELEASE_FAILED {pair}: {exc}")
+                        logger.error("SIGNAL_CLAIM_RELEASE_FAILED %s: %s", pair, exc)
                     self.signals[engine].invalidate(pair, engine, direction)
                     logger.warning(
-                        f"SIGNAL_NOT_DELIVERED {pair} engine={engine} direction={direction}; "
-                        "claim released for a controlled retry"
+                        "SIGNAL_NOT_QUEUED %s engine=%s direction=%s; claim released",
+                        pair, engine, direction,
                     )
         elif disposition == "WATCHLIST":
             self._log_candle_evaluation(
@@ -1285,6 +1258,29 @@ class SignalEngine:
             self._last_processed.setdefault(engine, {})[pair] = candle_ts
             self.watchlists[engine].add(signal)
             logger.info(f"WATCHLIST {direction} {pair} score={result.total}")
+
+    async def _queue_telegram_signal(self, signal: dict) -> bool:
+        """Persist one delivery per admin before treating an alert as accepted."""
+        if not self.telegram or not getattr(self.telegram, "admin_ids", None):
+            logger.warning("TELEGRAM_OUTBOX_NOT_QUEUED reason=no_bot_or_recipients")
+            return False
+        try:
+            from database.repositories import enqueue_signal_deliveries
+            queued = await enqueue_signal_deliveries(signal, self.telegram.admin_ids)
+            if queued > 0:
+                logger.info(
+                    "TELEGRAM_OUTBOX_QUEUED pair=%s engine=%s direction=%s recipients=%s",
+                    signal.get("pair"), signal.get("engine"), signal.get("direction"), queued,
+                )
+                return True
+            logger.error(
+                "TELEGRAM_OUTBOX_QUEUE_FAILED pair=%s engine=%s direction=%s",
+                signal.get("pair"), signal.get("engine"), signal.get("direction"),
+            )
+            return False
+        except Exception as exc:
+            logger.exception("TELEGRAM_OUTBOX_ENQUEUE_ERROR: %s", exc)
+            return False
 
     async def _persist_evicted_signals(self, engine: str) -> None:
         """Mirror in-memory capacity evictions to durable signal lifecycle rows."""
