@@ -62,7 +62,7 @@ MIT (bot code). CoinDCX API subject to their terms.
 
 - REST candle ingestion normalizes timestamps to UTC epoch milliseconds, removes malformed/duplicate rows, and passes completed candles only.
 - REST is authoritative for completed-candle decisions and uses a short shared cache. WebSocket is optional in local configuration; the Render blueprint explicitly enables it for live Futures LTP and forming-candle watchlist telemetry.
-- Normal alerts require directional 15m EMA9/21 context, 5m EMA/VWAP/ADX/RSI alignment, a quality candle close, anti-chase distance, and a recognized strategy predicate. Directional +DI/-DI alignment improves the ADX score but is not a hard gate, preserving earlier entries before DI crosses.
+- Normal alerts require directional 15m EMA9/21 context, 5m EMA/VWAP/ADX/RSI alignment, a quality candle close, anti-chase distance, and a recognized strategy predicate. Directional +DI/-DI alignment and rising ADX improve the ADX score but are not hard gates, preserving earlier entries before confirmation fully develops.
 - Momentum alerts require a qualified explosion, squeeze release, continuation, directional volume spike, or ORB state with directional confirmation; generic setup labels cannot trigger alerts.
 - Risk levels use nearby swing structure with ATR bounds and targets expressed as risk multiples.
 - Active signals are monitored against subsequent completed candle highs/lows. If stop and target are both touched in one candle, stop-loss is conservatively assumed first.
