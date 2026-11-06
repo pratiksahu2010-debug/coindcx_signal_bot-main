@@ -354,3 +354,65 @@ async def test_futures_ws_resubscribes_all_channels_after_reconnect(monkeypatch)
     assert set(all_joins) == expected
     assert len(all_joins) == len(expected) * 2
     assert stream._subscribed_channels == expected
+
+
+@pytest.mark.asyncio
+async def test_futures_ticker_handles_nested_data_prices_envelope(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return {"data": {"ts": now_ms, "prices": {
+            "B-BTC_USDT": {"ls": "65000"},
+        }}}
+
+    client._get = fake_get
+    rows = await client.get_ticker()
+    assert rows[0]["market"] == "B-BTC_USDT"
+    assert rows[0]["timestamp"] == now_ms
+    assert await client.get_last_price("B-BTC_USDT") == 65000.0
+
+
+@pytest.mark.asyncio
+async def test_futures_candles_handle_nested_data_candles_envelope(monkeypatch):
+    base = 1_800_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: base + 600)
+    client = CoinDCXRest()
+
+    async def fake_get(url, params=None):
+        return {"data": {"candles": [
+            {"time": base, "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10},
+        ]}}
+
+    client._get = fake_get
+    candles = await client.get_candles("B-BTC_USDT", "5m", limit=10)
+    assert len(candles) == 1
+    assert candles[0]["close"] == 101.0
+
+
+def test_futures_ws_candle_parser_recovers_full_pair_from_channel_and_normalizes_event_time():
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    class CandleStub:
+        def __init__(self):
+            self.rows = []
+
+        def on_candle(self, pair, interval, candle):
+            self.rows.append((pair, interval, candle))
+
+    builder = CandleStub()
+    stream = CoinDCXFuturesStream(builder, CoinDCXRest())
+    base = 1_800_000_000
+    stream._handle_candlestick({"data": {
+        "channel": "B-BTC_USDT_5m-futures",
+        "open_time": base,
+        "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10,
+        "Ets": base + 300,
+    }})
+    assert len(builder.rows) == 1
+    pair, interval, candle = builder.rows[0]
+    assert pair == "B-BTC_USDT"
+    assert interval == "5m"
+    assert candle["time"] == base * 1000
+    assert stream._last_event_ms == (base + 300) * 1000
