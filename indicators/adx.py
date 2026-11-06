@@ -18,12 +18,24 @@ def _wilder(arr: np.ndarray, period: int, start: int = 0) -> np.ndarray:
     return out
 
 def _calculate(high, low, close, period):
-    high=np.asarray(high,dtype=np.float64); low=np.asarray(low,dtype=np.float64); close=np.asarray(close,dtype=np.float64)
-    n=len(close)
-    if period < 1 or not (len(high)==len(low)==n) or n < 2*period:
+    try:
+        high = np.asarray(high, dtype=np.float64)
+        low = np.asarray(low, dtype=np.float64)
+        close = np.asarray(close, dtype=np.float64)
+        p = int(period)
+    except (TypeError, ValueError, OverflowError):
         return None
-    if not (np.all(np.isfinite(high)) and np.all(np.isfinite(low)) and np.all(np.isfinite(close))):
+    n = len(close)
+    if (
+        high.ndim != 1 or low.ndim != 1 or close.ndim != 1
+        or p != period or p < 1 or not (len(high) == len(low) == n)
+        or n < 2 * p
+        or not all(np.all(np.isfinite(x)) for x in (high, low, close))
+        or np.any(high <= 0) or np.any(low <= 0) or np.any(close <= 0)
+        or np.any(high < low) or np.any(close > high) or np.any(close < low)
+    ):
         return None
+    period = p
     tr=np.zeros(n); plus=np.zeros(n); minus=np.zeros(n)
     tr[0]=high[0]-low[0]
     for i in range(1,n):
