@@ -1341,6 +1341,9 @@ class SignalEngine:
                 price = float(live_price)
                 direction = signal["direction"]
                 stop = float(pending["stop_loss"])
+                candle_ts = int(pending["candle_ts"])
+                if direction not in ("LONG", "SHORT"):
+                    raise ValueError("invalid pending direction")
             except (KeyError, TypeError, ValueError, OverflowError):
                 await remove("invalid_payload")
                 continue
@@ -1358,8 +1361,17 @@ class SignalEngine:
             if delivery_price is None or classify_entry_state(float(delivery_price), pending["entry"], pending["zone_low"], pending["zone_high"], direction) != "IMMEDIATE":
                 continue
             signal = dict(signal)
-            signal.update({"live_price": float(delivery_price), "entry_type": "RETEST_CONFIRMED",
-                           "entry_checked_at": utc_iso(utc_now()), "timestamp": utc_iso(utc_now())})
+            signal_age = candle_age_seconds(
+                int(utc_now().timestamp() * 1000), candle_ts,
+                int(parse_interval(settings.candle_primary_tf).total_seconds() * 1000),
+            )
+            signal.update({
+                "live_price": float(delivery_price),
+                "entry_type": "RETEST_CONFIRMED",
+                "entry_checked_at": utc_iso(utc_now()),
+                "timestamp": utc_iso(utc_now()),
+                "signal_age_seconds": round(signal_age, 1),
+            })
             try:
                 from database.repositories import claim_signal_once
                 claimed = await claim_signal_once(signal, int(pending["candle_ts"]), ttl_hours=4)
