@@ -15,6 +15,7 @@ class FakeTelegram:
     def __init__(self):
         self.sent = []
         self.admin_ids = [123]
+        self.bot = object()
 
     async def send_signal(self, signal):
         self.sent.append(dict(signal))
@@ -59,7 +60,10 @@ def test_pending_retest_promotes_once_only_inside_original_zone(monkeypatch):
         async def save(signal):
             return True
 
+        queued_signals = []
+
         async def enqueue(signal, recipients):
+            queued_signals.append(dict(signal))
             return len(recipients)
 
         async def outcome(signal, price, status):
@@ -72,10 +76,10 @@ def test_pending_retest_promotes_once_only_inside_original_zone(monkeypatch):
         await engine._check_pending_retest("B-BTC_USDT", "normal")
         await engine._check_pending_retest("B-BTC_USDT", "normal")
         assert key not in engine.pending_retests
-        assert len(engine.telegram.sent) == 1
-        assert engine.telegram.sent[0]["entry_type"] == "RETEST_CONFIRMED"
+        assert len(queued_signals) == 1
+        assert queued_signals[0]["entry_type"] == "RETEST_CONFIRMED"
         # The original candle closed five minutes before this retest alert.
-        assert engine.telegram.sent[0]["signal_age_seconds"] == 300.0
+        assert queued_signals[0]["signal_age_seconds"] == 300.0
         assert claims == [1_800_000_000_000]
         assert engine.cooldowns["normal"].is_cooling(
             "B-BTC_USDT", "normal", "LONG"
