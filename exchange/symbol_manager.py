@@ -1,4 +1,4 @@
-"""Dynamic CoinDCX USDT universe selection for independent strategy engines."""
+"""Static CoinDCX USDT Futures allowlists with live exchange-availability validation."""
 import re
 import yaml
 from pathlib import Path
@@ -122,7 +122,7 @@ class SymbolManager:
         try:
             ticker_rows = await self.rest.get_ticker()
         except Exception as exc:
-            logger.warning(f"Ticker liquidity ranking unavailable; using active-market fallback: {exc}")
+            logger.warning(f"Ticker liquidity telemetry unavailable; static allowlists remain unchanged: {exc}")
         ticker_liquidity = self._ticker_liquidity(ticker_rows)
 
         self.valid_pairs.clear()
@@ -241,7 +241,7 @@ class SymbolManager:
         self._last_liquidity_refresh = __import__("time").time()
         self._select_active_symbols()
         logger.info(
-            f"Dynamic universe ready: normal={len(self.normal_symbols)}, "
+            f"Static universe ready: normal={len(self.normal_symbols)}, "
             f"momentum={len(self.momentum_symbols)}, eligible={len(self.valid_pairs)}"
         )
         if not self.valid_pairs:
@@ -249,7 +249,7 @@ class SymbolManager:
 
 
     async def _refresh_liquidity_ranking(self) -> None:
-        """Re-rank the discovered market universe by fresh 24h ticker volume."""
+        """Refresh volume telemetry without changing static symbol membership or order."""
         ticker_rows = await self.rest.get_ticker()
         latest = self._ticker_liquidity(ticker_rows)
         if not latest:
