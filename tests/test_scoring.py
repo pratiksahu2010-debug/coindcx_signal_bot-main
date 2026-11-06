@@ -281,3 +281,13 @@ def test_normal_adx_score_rewards_di_alignment_without_rejecting_opposition():
     assert aligned_adx.points > opposed_adx.points
     # DI opposition reduces quality; it does not become an extra hard gate.
     assert opposed_adx.points > 0
+
+
+def test_momentum_macd_direction_gets_partial_credit_before_acceleration():
+    engine = ScoringEngine()
+    aligned = engine.score_momentum({
+        "macd_direction_ok": True, "macd_accel": False,
+    }, "LONG")
+    component = next(c for c in aligned.components if c.name == "MACD Accel")
+    assert component.points == 0.5
+    assert component.valid
