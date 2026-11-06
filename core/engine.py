@@ -567,8 +567,6 @@ class SignalEngine:
         close_location = float((close[-1] - low[-1]) / candle_range)
         upper_wick = float((high[-1] - max(opens[-1], close[-1])) / candle_range)
         lower_wick = float((min(opens[-1], close[-1]) - low[-1]) / candle_range)
-        ema9_prev = ema(close[:-1], 9)
-        ema21_prev = ema(close[:-1], 21)
         adx_series = None
         adx_rising = False
         if len(close) >= 3:
@@ -577,8 +575,7 @@ class SignalEngine:
             adx_series = _a[0] if _a is not None else None
             adx_rising = bool(adx_series is not None and np.isfinite(adx_series[-1]) and np.isfinite(adx_series[-2]) and adx_series[-1] > adx_series[-2])
 
-        # 15m confirmation: require actual directional EMA alignment, price/VWAP
-        # location, and EMA slope. Mere indicator availability is not confirmation.
+        # 15m context is deliberately based on completed EMA9/EMA21 direction only.
         confirm_long = confirm_short = False
         confirm_candle_time_ms = None
         conf_data = await self.rest.get_candles(pair, settings.candle_confirm_tf, limit=CONFIRM_CANDLE_HISTORY)
@@ -642,13 +639,10 @@ class SignalEngine:
             "rvol": rvol,
             "body_ratio": body_ratio,
             "confirm_15m": False,
-            "structure_ok": structure_ok,
             "high": float(high[-1]), "low": float(low[-1]),
             "resistance": resistance, "support": support,
             "plus_di": plus_di, "minus_di": minus_di,
             "adx_rising": adx_rising,
-            "ema9_slope": (ema9-ema9_prev) if ema9 is not None and ema9_prev is not None else None,
-            "ema21_slope": (ema21-ema21_prev) if ema21 is not None and ema21_prev is not None else None,
             "body_ratio": body_ratio, "close_location": close_location,
             "upper_wick_ratio": upper_wick, "lower_wick_ratio": lower_wick,
             "rsi_prev": rsi(close[:-1],14),
@@ -751,12 +745,6 @@ class SignalEngine:
             macd_hist is not None and (
                 (direction == "LONG" and macd_hist > 0) or
                 (direction == "SHORT" and macd_hist < 0)
-            )
-        )
-        indicators["rsi_direction_ok"] = bool(
-            rsi_v is not None and (
-                (direction == "LONG" and rsi_v > 50.0) or
-                (direction == "SHORT" and rsi_v < 50.0)
             )
         )
         indicators["confirm_15m"] = confirm_long if direction == "LONG" else confirm_short
