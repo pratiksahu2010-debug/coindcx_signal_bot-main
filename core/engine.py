@@ -606,6 +606,7 @@ class SignalEngine:
                                (close[-1] > resistance or close[-1] < support))
 
         indicators = {
+            "direction": direction,
             "close": close[-1],
             "ema9": ema9,
             "ema21": ema21,
@@ -944,7 +945,7 @@ class SignalEngine:
                 )
             momentum_gates = {
                 "momentum_state": valid_momentum_state,
-                "macd_direction": bool(indicators["macd_direction_ok"] or momentum_state in ("ORB_BREAKOUT", "ORB_RETEST")),
+                "macd_direction": bool(indicators["macd_direction_ok"] or momentum_state in ("EXPLOSION", "ORB_BREAKOUT", "ORB_RETEST")),
                 # A 15m close, DI cross and large candle body can lag the move.
                 # A structure break no longer bypasses extension protection.
                 "anti_chase_and_breakout_extension": bool(momentum_entry_actionable),
