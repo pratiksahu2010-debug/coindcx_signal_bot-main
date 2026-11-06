@@ -130,3 +130,19 @@ def test_pending_retest_false_persistence_result_fails_closed(monkeypatch):
         assert key not in engine.pending_retests
 
     asyncio.run(run())
+
+
+def test_pending_retest_does_not_send_when_same_signal_is_already_active():
+    async def run():
+        engine = SignalEngine(FakeRest([100.0]), object(), object())
+        engine.telegram = FakeTelegram()
+        key = _pending(engine, expires_at=9_999_999_999_999)
+        engine.signals["normal"].add({
+            "pair": "B-BTC_USDT", "engine": "normal", "direction": "LONG",
+            "score": 8.0,
+        })
+        await engine._check_pending_retest("B-BTC_USDT", "normal")
+        assert engine.telegram.sent == []
+        assert key not in engine.pending_retests
+
+    asyncio.run(run())
