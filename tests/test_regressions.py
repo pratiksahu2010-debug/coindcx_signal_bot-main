@@ -492,8 +492,8 @@ def test_persistent_dedup_claim_prunes_expired_rows(tmp_path):
             async with database_db.SessionLocal() as session:
                 session.add(SignalDedupRecord(
                     dedup_key="expired:SHORT:1", candle_time_ms=1, payload="{}",
-                    created_at=datetime.utcnow() - timedelta(hours=5),
-                    expires_at=datetime.utcnow() - timedelta(seconds=1),
+                    created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=5),
+                    expires_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1),
                 ))
                 await session.commit()
             signal = {"pair": "B-ETH_USDT", "engine": "normal", "direction": "LONG", "score": 8.0}
@@ -668,7 +668,7 @@ def test_restore_marks_payload_expired_even_if_db_row_is_recent(tmp_path):
                 session.add(SignalRecord(
                     pair="B-ETH_USDT", engine="normal", direction="SHORT", score=7.5,
                     grade="SIGNAL", price=100.0, status="active",
-                    payload=json.dumps(expired_payload), created_at=datetime.utcnow(),
+                    payload=json.dumps(expired_payload), created_at=datetime.now(timezone.utc).replace(tzinfo=None),
                 ))
                 await session.commit()
             assert await load_active_signals() == []
