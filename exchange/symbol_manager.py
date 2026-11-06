@@ -338,7 +338,7 @@ class SymbolManager:
                 existing["reason"] = reason
 
     def _select_active_symbols(self) -> None:
-        """Keep static ordering while enforcing per-engine minimum 24h turnover."""
+        """Keep static order while enforcing per-engine minimum 24h turnover."""
         excluded = set(self._quarantined)
 
         def select(rank: List[str], limit: int, minimum: float, label: str) -> List[str]:
@@ -348,22 +348,7 @@ class SymbolManager:
                     continue
                 turnover = self.liquidity.get(pair, 0.0)
                 if turnover < minimum:
-                    reason = (
-                        f"liquidity unknown; no reliable Futures 24h quote-turnover estimate"
-                        if turnover <= 0 else
-                        f"estimated 24h Futures turnover {turnover:.0f} USDT below {minimum:.0f} USDT"
-                    )
-                    self.skipped_reasons[pair] = reason
-                    self.whitelist_diagnostics[self._norm(pair)] = {
-                        "configured_symbol": self._norm(pair),
-                        "status": "LIQUIDITY_UNKNOWN" if turnover <= 0 else "LOW_LIQUIDITY",
-                        "reason": reason,
-                        "estimated_24h_turnover_usdt": turnover,
-                        "minimum_24h_turnover_usdt": minimum,
-                    }
                     continue
-                self.skipped_reasons.pop(pair, None)
-                self.whitelist_diagnostics.pop(self._norm(pair), None)
                 chosen.append(pair)
                 if len(chosen) >= max(1, int(limit)):
                     break
@@ -382,6 +367,66 @@ class SymbolManager:
             settings.momentum_min_24h_turnover_usdt, "Momentum",
         )
         selected = set(self.normal_symbols) | set(self.momentum_symbols)
+
+        # Preserve per-engine exclusion details. A contract can fail the Normal
+        # floor but still be eligible for Momentum/ORB, so a single global
+        # LOW_LIQUIDITY status would be misleading.
+        for pair in set(self._ranked_normal) | set(self._ranked_momentum):
+            if pair in excluded:
+                continue
+            turnover = self.liquidity.get(pair, 0.0)
+            normal_in = pair in self._ranked_normal
+            momentum_in = pair in self._ranked_momentum
+            normal_status = (
+                "NOT_IN_UNIVERSE" if not normal_in else
+                "ELIGIBLE" if turnover >= settings.normal_min_24h_turnover_usdt else
+                "LIQUIDITY_UNKNOWN" if turnover <= 0 else "LOW_LIQUIDITY"
+            )
+            momentum_status = (
+                "NOT_IN_UNIVERSE" if not momentum_in else
+                "ELIGIBLE" if turnover >= settings.momentum_min_24h_turnover_usdt else
+                "LIQUIDITY_UNKNOWN" if turnover <= 0 else "LOW_LIQUIDITY"
+            )
+            excluded_statuses = [
+                value for value in (normal_status, momentum_status)
+                if value in ("LOW_LIQUIDITY", "LIQUIDITY_UNKNOWN")
+            ]
+            key = self._norm(pair)
+            if excluded_statuses:
+                eligible_somewhere = "ELIGIBLE" in (normal_status, momentum_status)
+                if eligible_somewhere:
+                    overall = "PARTIAL_LIQUIDITY"
+                elif "LIQUIDITY_UNKNOWN" in excluded_statuses:
+                    overall = "LIQUIDITY_UNKNOWN"
+                else:
+                    overall = "LOW_LIQUIDITY"
+                reasons = []
+                if normal_status in ("LOW_LIQUIDITY", "LIQUIDITY_UNKNOWN"):
+                    reasons.append(
+                        f"Normal: {turnover:.0f} USDT estimated turnover below "
+                        f"{settings.normal_min_24h_turnover_usdt:.0f}"
+                    )
+                if momentum_status in ("LOW_LIQUIDITY", "LIQUIDITY_UNKNOWN"):
+                    reasons.append(
+                        f"Momentum/ORB: {turnover:.0f} USDT estimated turnover below "
+                        f"{settings.momentum_min_24h_turnover_usdt:.0f}"
+                    )
+                reason = "; ".join(reasons)
+                self.whitelist_diagnostics[key] = {
+                    "configured_symbol": key,
+                    "status": overall,
+                    "reason": reason,
+                    "normal_status": normal_status,
+                    "momentum_status": momentum_status,
+                    "estimated_24h_turnover_usdt": turnover,
+                    "normal_min_24h_turnover_usdt": settings.normal_min_24h_turnover_usdt,
+                    "momentum_min_24h_turnover_usdt": settings.momentum_min_24h_turnover_usdt,
+                }
+                self.skipped_reasons[pair] = reason
+            else:
+                self.whitelist_diagnostics.pop(key, None)
+                self.skipped_reasons.pop(pair, None)
+
         for pair, item in self._quarantined.items():
             retry_at = datetime.fromtimestamp(item["retry_at"], tz=timezone.utc).isoformat()
             self.skipped_reasons[pair] = f"temporarily quarantined until {retry_at}: {item['reason']}"
