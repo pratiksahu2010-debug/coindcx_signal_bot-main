@@ -75,3 +75,26 @@ async def test_health_reports_database_degraded_state():
             delattr(app.state, "bot_state")
         else:
             app.state.bot_state = old_state
+
+
+@pytest.mark.asyncio
+async def test_health_reports_empty_enabled_universe_as_degraded():
+    old_state = getattr(app.state, "bot_state", None)
+    app.state.bot_state = {
+        "database": "postgres",
+        "normal_engine": "starting",
+        "momentum_engine": "starting",
+        "valid_symbols_normal": 0,
+        "valid_symbols_momentum": 80,
+    }
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/health")
+            assert resp.status_code == 503
+            assert "normal_universe_empty" in resp.json()["reasons"]
+    finally:
+        if old_state is None:
+            delattr(app.state, "bot_state")
+        else:
+            app.state.bot_state = old_state
