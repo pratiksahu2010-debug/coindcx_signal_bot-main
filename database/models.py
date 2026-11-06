@@ -1,8 +1,13 @@
 """SQLAlchemy models for persistent state."""
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import String, Float, Boolean, DateTime, Text, Integer, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column
 from database.db import Base
+
+
+def _utc_naive_now() -> datetime:
+    """UTC timestamp stored as naive for the existing SQLAlchemy schema."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class SignalRecord(Base):
@@ -16,7 +21,7 @@ class SignalRecord(Base):
     price: Mapped[float] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(16), default="active")
     payload: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_naive_now)
 
 
 class WatchlistRecord(Base):
@@ -27,7 +32,7 @@ class WatchlistRecord(Base):
     direction: Mapped[str] = mapped_column(String(8))
     score: Mapped[float] = mapped_column(Float)
     payload: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_naive_now)
 
 
 class SignalDedupRecord(Base):
@@ -36,7 +41,7 @@ class SignalDedupRecord(Base):
     dedup_key: Mapped[str] = mapped_column(String(96), primary_key=True)
     candle_time_ms: Mapped[int] = mapped_column(BigInteger, default=0)
     payload: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_naive_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
@@ -49,7 +54,7 @@ class PendingRetestRecord(Base):
     direction: Mapped[str] = mapped_column(String(8))
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     payload: Mapped[str] = mapped_column(Text, default="{}")
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_naive_now)
 
 
 class SignalOutcomeRecord(Base):
@@ -67,8 +72,8 @@ class SignalOutcomeRecord(Base):
     mae_pct: Mapped[float] = mapped_column(Float, default=0.0)
     outcome: Mapped[str] = mapped_column(String(24), default="ACTIVE", index=True)
     payload: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_naive_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_naive_now)
 
 
 class SignalDeliveryRecord(Base):
@@ -80,4 +85,4 @@ class SignalDeliveryRecord(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_naive_now)
