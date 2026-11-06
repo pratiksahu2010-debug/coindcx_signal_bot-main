@@ -1,5 +1,6 @@
 """Static CoinDCX USDT Futures allowlists with live exchange-availability validation."""
 import re
+import time
 import yaml
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
@@ -82,9 +83,17 @@ class SymbolManager:
     def _ticker_liquidity(self, ticker_rows: list) -> Dict[str, float]:
         """Estimate 24h USDT turnover from documented Futures base volume x LTP."""
         values: Dict[str, float] = {}
+        age_getter = getattr(self.rest, "_ticker_age_seconds", None)
+        freshness_check = getattr(self.rest, "_is_fresh_ticker_age", None)
+        now_ms = int(time.time() * 1000)
+        max_age = getattr(self.rest, "MAX_REST_TICKER_AGE_SECONDS", 10.0)
         for row in ticker_rows or []:
             if not isinstance(row, dict):
                 continue
+            if callable(age_getter) and callable(freshness_check):
+                age = age_getter(row.get("timestamp"), now_ms)
+                if not freshness_check(age, max_age):
+                    continue
             aliases = [
                 row.get("market"), row.get("pair"), row.get("symbol"),
                 row.get("coindcx_name"), row.get("market_name"),
