@@ -117,6 +117,9 @@ class ScoringEngine:
                 expl += "; DI not aligned (reduced score)"
             elif pts > 0 and di_aligned is True:
                 expl += "; DI aligned"
+            if pts > 0 and indicators.get("adx_rising") is True:
+                pts = min(w["adx"], pts + w["adx"] * 0.15)
+                expl += "; ADX rising"
         comps.append(ScoreComponent("ADX", pts, w["adx"], adx_v, direction, expl, pts > 0))
 
         # RSI(14) directional threshold matches the Normal Engine gate.
