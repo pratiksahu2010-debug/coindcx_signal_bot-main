@@ -6,7 +6,7 @@
 - Normal Engine (trend / pullback / breakout) + Momentum Explosion Engine
 - Dual-session crypto ORB: London 08:00 Europe/London and New York 09:30 America/New_York with 15-minute opening ranges and DST-aware clocks
 - 10-point scoring, ATR risk (SL / TP1 / TP2 / TP3)
-- Interactive Telegram signals to admin IDs
+- Telegram push alerts to configured admin IDs (push-only; command polling is disabled)
 - FastAPI health: `/health` `/ping` `/status` `/metrics`
 - CoinDCX REST (markets_details + candles with 5m support)
 - Designed for Render Free Tier + external cron keep-alive
@@ -26,7 +26,7 @@
    - `DATABASE_URL` = the Internal Database URL from a managed Render PostgreSQL instance (keep it secret)
 7. Keep exactly **one Render service instance** and the configured **one Uvicorn worker**. Do not deploy a second copy with the same Telegram bot token.
 9. Deploy
-10. Open bot in Telegram → send `/start`
+10. Verify `/health` and `/status`, then wait for completed-candle alerts to be pushed to the configured admin IDs. Telegram command polling is not enabled.
 11. Cron-job.org → GET `https://YOUR-SERVICE.onrender.com/ping` every 10–14 min
 
 ## Keep-alive and health checks
@@ -61,8 +61,8 @@ MIT (bot code). CoinDCX API subject to their terms.
 ## Signal-quality and safety behavior (audit upgrade)
 
 - REST candle ingestion normalizes timestamps to UTC epoch milliseconds, removes malformed/duplicate rows, and passes completed candles only.
-- 5m and 15m data are refreshed through a short shared REST cache; WebSocket is disabled by default because this release uses the REST scanner as its authoritative feed.
-- Normal alerts require directional 15m EMA/VWAP confirmation, 5m ADX/DI alignment, quality candle close, anti-chase distance, and a recognized strategy predicate.
+- REST is authoritative for completed-candle decisions and uses a short shared cache. WebSocket is optional in local configuration; the Render blueprint explicitly enables it for live Futures LTP and forming-candle watchlist telemetry.
+- Normal alerts require directional 15m EMA9/21 context, 5m EMA/VWAP/ADX/RSI alignment, a quality candle close, anti-chase distance, and a recognized strategy predicate. Directional +DI/-DI alignment improves the ADX score but is not a hard gate, preserving earlier entries before DI crosses.
 - Momentum alerts require a real squeeze/explosion/continuation state with directional confirmation; generic momentum labels cannot trigger alerts.
 - Risk levels use nearby swing structure with ATR bounds and targets expressed as risk multiples.
 - Active signals are monitored against subsequent completed candle highs/lows. If stop and target are both touched in one candle, stop-loss is conservatively assumed first.
