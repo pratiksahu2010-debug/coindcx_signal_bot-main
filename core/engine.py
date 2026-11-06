@@ -29,6 +29,10 @@ import numpy as np
 # Covers a full UTC day (288 x 5m / 96 x 15m) plus a small history margin.
 PRIMARY_CANDLE_HISTORY = 300
 CONFIRM_CANDLE_HISTORY = 120
+VALID_MOMENTUM_STATES = frozenset({
+    "EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION",
+    "VOLUME_SPIKE", "ORB_BREAKOUT", "ORB_RETEST",
+})
 
 
 def _score_disposition(score: float, signal_threshold: float) -> str:
@@ -947,9 +951,7 @@ class SignalEngine:
                     "timestamp": utc_iso(utc_now()),
                 })
                 return
-            valid_momentum_state = momentum_state in (
-                "EXPLOSION", "SQUEEZE_RELEASE", "CONTINUATION", "ORB_BREAKOUT", "ORB_RETEST"
-            )
+            valid_momentum_state = momentum_state in VALID_MOMENTUM_STATES
             breakout_extension = indicators.get("orb_breakout_extension_atr")
             if momentum_state in ("ORB_BREAKOUT", "ORB_RETEST"):
                 momentum_entry_actionable = (
