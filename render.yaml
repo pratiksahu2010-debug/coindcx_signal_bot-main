@@ -19,6 +19,10 @@ services:
         value: "7.0"
       - key: CANDLE_PRIMARY_TF
         value: "5m"
+      - key: SIGNAL_ONLY
+        value: "true"
+      - key: ORDERS_ENABLED
+        value: "false"
       - key: CANDLE_CONFIRM_TF
         value: "15m"
       - key: ENABLE_WEBSOCKET
@@ -27,6 +31,18 @@ services:
         value: "true"
       - key: ENABLE_MOMENTUM_ENGINE
         value: "true"
+      - key: ORB_ENABLED
+        value: "true"
+      - key: ORB_LONDON_ENABLED
+        value: "true"
+      - key: ORB_NEW_YORK_ENABLED
+        value: "true"
+      - key: ORB_MIN_RVOL
+        value: "1.30"
+      - key: ORB_MAX_EXTENSION_ATR
+        value: "0.80"
+      - key: ORB_ACTIVE_MINUTES
+        value: "180"
       - key: NORMAL_SYMBOL_LIMIT
         value: "40"
       - key: MOMENTUM_SYMBOL_LIMIT
