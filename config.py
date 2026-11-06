@@ -69,9 +69,16 @@ if HAS_PYDANTIC:
 
         @property
         def admin_ids(self) -> List[int]:
-            if not self.telegram_admin_ids.strip():
-                return []
-            return [int(x.strip()) for x in self.telegram_admin_ids.split(",") if x.strip()]
+            """Return unique positive numeric Telegram IDs; ignore malformed entries safely."""
+            ids = []
+            for item in self.telegram_admin_ids.split(","):
+                try:
+                    value = int(item.strip())
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if value > 0 and value not in ids:
+                    ids.append(value)
+            return ids
 
         @property
         def is_production(self) -> bool:
@@ -135,9 +142,16 @@ else:
 
         @property
         def admin_ids(self) -> List[int]:
-            if not self.telegram_admin_ids.strip():
-                return []
-            return [int(x.strip()) for x in self.telegram_admin_ids.split(",") if x.strip()]
+            """Return unique positive numeric Telegram IDs; ignore malformed entries safely."""
+            ids = []
+            for item in self.telegram_admin_ids.split(","):
+                try:
+                    value = int(item.strip())
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if value > 0 and value not in ids:
+                    ids.append(value)
+            return ids
 
         @property
         def is_production(self) -> bool:
