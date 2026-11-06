@@ -121,6 +121,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "telegram_polling": bool(tg.polling_active),
         "eligible_symbols": len(symbol_mgr.valid_pairs),
         "skipped_symbols": len(symbol_mgr.skipped_reasons),
+        "liquidity_filtered_symbols": sum(
+            item.get("status") in ("LOW_LIQUIDITY", "LIQUIDITY_UNKNOWN")
+            for item in symbol_mgr.whitelist_diagnostics.values()
+        ),
+        "normal_min_24h_turnover_usdt": settings.normal_min_24h_turnover_usdt,
+        "momentum_min_24h_turnover_usdt": settings.momentum_min_24h_turnover_usdt,
     }
 
     # Never run strategy scans without durable signal-claim storage. Keep the
