@@ -113,22 +113,10 @@ class SymbolManager:
         except Exception as exc:
             logger.error(f"markets_details failed: {exc}")
 
+        # Fail closed: Spot market listings are NOT proof that a USDT Futures
+        # contract exists. Never synthesize Futures pairs from the Spot market list.
         if not details:
-            try:
-                markets = await self.rest.get_markets()
-                for market in markets or []:
-                    if not isinstance(market, str) or not market.upper().endswith("USDT"):
-                        continue
-                    target = market[:-4]
-                    details.append({
-                        "pair": f"B-{target}_USDT",
-                        "coindcx_name": market,
-                        "base_currency_short_name": "USDT",
-                        "target_currency_short_name": target,
-                        "status": "active",
-                    })
-            except Exception as exc:
-                logger.error(f"CoinDCX market-list fallback failed: {exc}")
+            logger.error("No active USDT Futures instrument data; static universes remain empty")
 
         ticker_rows = []
         try:
@@ -204,66 +192,49 @@ class SymbolManager:
         self.whitelist_diagnostics.clear()
 
         def rank_universe(preferences: Dict[str, int], limit: int, label: str) -> List[str]:
-            # Momentum/ORB share an exact static configured whitelist. Do not
-            # silently replace unavailable configured instruments with unrelated markets.
-            if label == "Momentum":
-                configured = list(preferences.keys())
-                available_by_key = {self._norm(pair): pair for pair in self.valid_pairs}
-                selected = []
-                missing = []
-                for key in configured:
-                    pair = available_by_key.get(key)
-                    if pair:
-                        selected.append(pair)
+            # Static allowlist order is authoritative for every engine. CoinDCX
+            # active Futures data only validates availability; ticker volume
+            # never adds, reorders, or substitutes symbols.
+            configured = list(preferences.keys())
+            available_by_key = {self._norm(pair): pair for pair in self.valid_pairs}
+            selected: List[str] = []
+            missing: List[str] = []
+            for key in configured:
+                pair = available_by_key.get(key)
+                if pair:
+                    selected.append(pair)
+                    continue
+                missing.append(key)
+                raw_market = discovered_by_key.get(key)
+                if raw_market is None:
+                    status = "NOT_LISTED"
+                    reason = "not returned by active USDT Futures instruments endpoint"
+                else:
+                    market_status = str(raw_market.get("status") or "active").lower()
+                    if market_status not in ("active", "trading", "enabled", "online", "1", ""):
+                        status = "INACTIVE"
+                        reason = f"exchange status={market_status}"
+                    elif self._is_stablecoin_pair(
+                        str(raw_market.get("pair") or raw_market.get("coindcx_name") or ""),
+                        str(raw_market.get("target_currency_short_name") or ""),
+                    ):
+                        status = "EXCLUDED"
+                        reason = "stablecoin-to-USDT pair excluded"
                     else:
-                        missing.append(key)
-                        raw_market = discovered_by_key.get(key)
-                        if raw_market is None:
-                            status = "NOT_LISTED"
-                            reason = "not returned by active USDT Futures instruments endpoint"
-                        else:
-                            market_status = str(raw_market.get("status") or "active").lower()
-                            if market_status not in ("active", "trading", "enabled", "online", "1", ""):
-                                status = "INACTIVE"
-                                reason = f"exchange status={market_status}"
-                            elif self._is_stablecoin_pair(
-                                str(raw_market.get("pair") or raw_market.get("coindcx_name") or ""),
-                                str(raw_market.get("target_currency_short_name") or ""),
-                            ):
-                                status = "EXCLUDED"
-                                reason = "stablecoin-to-USDT pair excluded"
-                            else:
-                                status = "NOT_ELIGIBLE"
-                                reason = "returned by exchange but failed active USDT Futures normalization"
-                        self.whitelist_diagnostics[key] = {
-                            "configured_symbol": key, "status": status, "reason": reason,
-                        }
-                        logger.warning(
-                            f"MOMENTUM_WHITELIST_SYMBOL symbol={key} status={status} reason={reason}"
-                        )
-                if missing:
-                    logger.warning(
-                        f"MOMENTUM_WHITELIST_UNAVAILABLE count={len(missing)} "
-                        f"symbols={','.join(missing)}"
-                    )
-                return selected[:limit]
-
-            pairs = list(self.valid_pairs)
-            has_liquidity = any(self.liquidity.get(pair, 0) > 0 for pair in pairs)
-            if has_liquidity:
-                pairs = [pair for pair in pairs if self.liquidity.get(pair, 0.0) > 0]
-                pairs.sort(key=lambda pair: (
-                    -self.liquidity.get(pair, 0.0),
-                    preferences.get(self._norm(pair), 10**9), pair,
-                ))
-                logger.info(f"{label}: ranked Futures markets with positive 24h volume")
-            else:
-                pairs.sort(key=lambda pair: (preferences.get(self._norm(pair), 10**9), pair))
-                logger.warning(f"{label}: no Futures volume; using configured order then symbol order")
-            # Keep the full ranked Normal candidate list. The active-universe
-            # selector applies the configured limit after quarantine filtering,
-            # allowing the next liquid market to backfill a quarantined symbol.
-            return pairs
+                        status = "NOT_ELIGIBLE"
+                        reason = "returned by exchange but failed active USDT Futures normalization"
+                self.whitelist_diagnostics[key] = {
+                    "configured_symbol": key, "status": status, "reason": reason,
+                }
+                logger.warning(
+                    f"{label.upper()}_STATIC_SYMBOL symbol={key} status={status} reason={reason}"
+                )
+            if missing:
+                logger.warning(
+                    f"{label.upper()}_STATIC_SYMBOLS_UNAVAILABLE count={len(missing)} "
+                    f"symbols={','.join(missing)}"
+                )
+            return selected[:max(1, int(limit))]
 
         self._ranked_normal = rank_universe(normal_rank, settings.normal_symbol_limit, "Normal")
         self._ranked_momentum = rank_universe(momentum_rank, settings.momentum_symbol_limit, "Momentum")
@@ -314,30 +285,14 @@ class SymbolManager:
             else:
                 self.skipped_reasons.pop(pair, None)
 
-        normal_preferences = {
-            self._norm(symbol): index
-            for index, symbol in enumerate(self._load_yaml("config/normal_symbols.yaml"))
-        }
-        momentum_preferences = {
-            self._norm(symbol): index
-            for index, symbol in enumerate(self._load_yaml("config/momentum_symbols.yaml"))
-        }
-
-        def rank(preferences: Dict[str, int], label: str) -> List[str]:
-            if label == "Momentum":
-                available = {self._norm(pair): pair for pair in self.valid_pairs}
-                selected = [available[key] for key in preferences if key in available]
-                missing = [key for key in preferences if key not in available]
-                if missing:
-                    logger.warning(f"MOMENTUM_WHITELIST_UNAVAILABLE count={len(missing)} symbols={','.join(missing)}")
-                return selected[:settings.momentum_symbol_limit]
-            pairs = [pair for pair in self.valid_pairs if self.liquidity.get(pair, 0.0) > 0]
-            pairs.sort(key=lambda pair: (-self.liquidity.get(pair, 0.0), preferences.get(self._norm(pair), 10**9), pair))
-            logger.info(f"{label}: refreshed Futures liquidity ranking ({len(pairs)} markets with volume)")
-            return pairs
-
-        self._ranked_normal = rank(normal_preferences, "Normal")
-        self._ranked_momentum = rank(momentum_preferences, "Momentum")
+        # Refresh diagnostics/volume telemetry only. The static YAML allowlists
+        # determine membership and order; live volume must not reorder symbols.
+        self.liquidity.update(updated_liquidity)
+        for pair, volume in updated_liquidity.items():
+            if volume <= 0:
+                self.skipped_reasons[pair] = "no matching positive ticker volume (static allowlist retained)"
+            elif pair in self.valid_pairs:
+                self.skipped_reasons.pop(pair, None)
         self._last_liquidity_refresh = __import__("time").time()
         self._select_active_symbols()
 
