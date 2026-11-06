@@ -90,3 +90,36 @@ def test_outbox_expires_alerts_after_entry_validity_window(tmp_path, monkeypatch
             await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_retest_outbox_gets_fresh_delivery_window_even_when_origin_candle_is_old(tmp_path, monkeypatch):
+    async def run():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'outbox_retest.db'}")
+        old_engine, old_factory = database_db.engine, database_db.SessionLocal
+        database_db.engine = engine
+        database_db.SessionLocal = async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
+        monkeypatch.setattr("config.settings.max_signal_age_seconds", 120)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            signal = {
+                "pair": "B-ETH_USDT", "engine": "normal", "direction": "LONG",
+                "candle_time_ms": 1_800_000_000_000, "signal_age_seconds": 300,
+                "entry_type": "RETEST_CONFIRMED", "price": 3000,
+            }
+            assert await enqueue_signal_deliveries(signal, [444]) == 1
+            from sqlalchemy import select
+            from database.models import SignalDeliveryRecord
+            async with database_db.SessionLocal() as session:
+                row = (await session.execute(select(SignalDeliveryRecord))).scalar_one()
+                import json
+                expiry = datetime.fromisoformat(json.loads(row.payload)["expires_at"])
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                assert 115 <= (expiry - now).total_seconds() <= 120
+        finally:
+            database_db.engine, database_db.SessionLocal = old_engine, old_factory
+            await engine.dispose()
+
+    asyncio.run(run())
