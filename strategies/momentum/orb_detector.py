@@ -20,7 +20,7 @@ def evaluate(candles, atr_value, rvol, session="london", min_rvol=1.30,
         tz = ZoneInfo(spec["timezone"])
         ts = candles["time"]
         op, hi, lo, cl = (candles[k] for k in ("open", "high", "low", "close"))
-        if len(ts) < 4 or not all(len(x) == len(ts) for x in (op, hi, lo, cl)):
+        if len(ts) == 0 or not all(len(x) == len(ts) for x in (op, hi, lo, cl)):
             return {"state": "INVALID_DATA", "session": session}
 
         now = _local(ts[-1], tz)
