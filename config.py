@@ -56,8 +56,6 @@ if HAS_PYDANTIC:
         orb_min_rvol: float = Field(default=1.30, alias="ORB_MIN_RVOL")
         orb_max_extension_atr: float = Field(default=0.80, alias="ORB_MAX_EXTENSION_ATR")
         orb_active_minutes: int = Field(default=180, alias="ORB_ACTIVE_MINUTES")
-        rvol_min: float = 1.2
-        atr_min_pct: float = 0.3
 
         @property
         def signal_only(self) -> bool:
@@ -129,8 +127,6 @@ else:
             self.orb_min_rvol = float(os.getenv("ORB_MIN_RVOL", "1.30"))
             self.orb_max_extension_atr = float(os.getenv("ORB_MAX_EXTENSION_ATR", "0.80"))
             self.orb_active_minutes = int(os.getenv("ORB_ACTIVE_MINUTES", "180"))
-            self.rvol_min = 1.2
-            self.atr_min_pct = 0.3
 
         @property
         def signal_only(self) -> bool:
