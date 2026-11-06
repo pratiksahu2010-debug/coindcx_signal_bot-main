@@ -15,6 +15,7 @@ class WatchlistManager:
         return f"{pair}:{engine}:{direction}"
 
     def add(self, signal: dict) -> bool:
+        self._purge_expired()
         pair = signal["pair"]
         engine = signal["engine"]
         direction = signal["direction"]
@@ -81,12 +82,18 @@ class WatchlistManager:
     def _expired(self, entry: dict) -> bool:
         exp = entry.get("expires_at")
         if not exp:
-            return False
+            return True
         try:
-            exp = exp.replace("Z", "+00:00")
-            return datetime.fromisoformat(exp) <= datetime.now(timezone.utc)
-        except Exception:
-            return False
+            if isinstance(exp, datetime):
+                parsed = exp
+            else:
+                parsed = datetime.fromisoformat(str(exp).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed <= datetime.now(timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            # Invalid expiry data must not keep a stale watchlist setup forever.
+            return True
 
     def _purge_expired(self) -> None:
         expired = [k for k, v in self._entries.items() if self._expired(v)]
