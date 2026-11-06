@@ -101,6 +101,7 @@ class ScoringEngine:
         pts = 0.0
         expl = "N/A"
         if adx_v is not None:
+            di_aligned = indicators.get("di_direction_ok")
             if adx_v >= max(settings.normal_adx_min + 7, 25):
                 pts = w["adx"]
                 expl = f"ADX {adx_v:.1f} ≥ {max(settings.normal_adx_min + 7, 25):.1f} (strong)"
@@ -109,6 +110,13 @@ class ScoringEngine:
                 expl = f"ADX {adx_v:.1f} ≥ {settings.normal_adx_min:.1f} (moderate)"
             else:
                 expl = f"ADX {adx_v:.1f} weak"
+            # DI is a quality modifier, not a hard gate, so early turns are
+            # not discarded solely because +DI/-DI has not crossed yet.
+            if pts > 0 and di_aligned is False:
+                pts *= 0.5
+                expl += "; DI not aligned (reduced score)"
+            elif pts > 0 and di_aligned is True:
+                expl += "; DI aligned"
         comps.append(ScoreComponent("ADX", pts, w["adx"], adx_v, direction, expl, pts > 0))
 
         # RSI(14) directional threshold matches the Normal Engine gate.
