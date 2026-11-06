@@ -132,6 +132,7 @@ class CoinDCXFuturesStream:
         if not isinstance(message, dict):
             return
         payload = message.get("data", message)
+        outer_channel = message.get("channel") or message.get("channelName")
         rows = payload if isinstance(payload, list) else [payload]
         for row in rows:
             if not isinstance(row, dict):
@@ -139,7 +140,7 @@ class CoinDCXFuturesStream:
             try:
                 raw_pair = row.get("pair") or row.get("market") or row.get("symbol")
                 if not raw_pair:
-                    channel = str(row.get("channel", ""))
+                    channel = str(row.get("channel") or outer_channel or "")
                     match = re.search(r"((?:B|I|HB|KC)-[A-Z0-9]+_[A-Z0-9]+)", channel.upper())
                     raw_pair = match.group(1) if match else ""
                 pair = str(raw_pair or "").strip().upper()
@@ -160,7 +161,7 @@ class CoinDCXFuturesStream:
                 duration = str(row.get("duration") or row.get("i") or "")
                 interval = duration if duration else None
                 if interval not in ("1m", "5m", "15m", "30m", "1h", "4h", "8h", "1d", "3d", "1w", "1M"):
-                    channel = str(row.get("channel", ""))
+                    channel = str(row.get("channel") or outer_channel or "")
                     interval = next((x for x in ("5m", "15m") if x in channel), None)
                 if interval:
                     self.candles.on_candle(pair, interval, candle)
