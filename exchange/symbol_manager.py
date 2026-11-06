@@ -80,6 +80,7 @@ class SymbolManager:
             return []
 
     def _ticker_liquidity(self, ticker_rows: list) -> Dict[str, float]:
+        """Estimate 24h USDT turnover from documented Futures base volume x LTP."""
         values: Dict[str, float] = {}
         for row in ticker_rows or []:
             if not isinstance(row, dict):
@@ -88,18 +89,28 @@ class SymbolManager:
                 row.get("market"), row.get("pair"), row.get("symbol"),
                 row.get("coindcx_name"), row.get("market_name"),
             ]
+            # Prefer an explicitly quote-denominated turnover field when one is
+            # supplied. Do not treat an ambiguous generic volume field as USDT.
             quote_volume = 0.0
-            for key in ("quote_volume", "quoteVolume", "volume_quote",
-                        "turnover", "turnover_24h", "quote_volume_24h",
-                        "volume_24h_usdt", "volume_24h"):
+            for key in (
+                "quote_volume", "quoteVolume", "volume_quote",
+                "turnover_usdt", "turnover_24h_usdt", "quote_volume_24h_usdt",
+            ):
                 quote_volume = self._as_positive(row.get(key))
                 if quote_volume:
                     break
             if not quote_volume:
-                base_volume = self._as_positive(row.get("base_volume") or row.get("volume"))
-                last_price = self._as_positive(row.get("last_price") or row.get("lastPrice") or row.get("price"))
-                quote_volume = base_volume * last_price if base_volume and last_price else base_volume
-            if quote_volume:
+                # CoinDCX Futures current-prices documents v as 24h base volume
+                # and ls as last price. Their product is an estimated quote
+                # turnover (not exact trade-by-trade notional).
+                base_volume = self._as_positive(
+                    row.get("base_volume") or row.get("v")
+                )
+                last_price = self._as_positive(
+                    row.get("last_price") or row.get("lastPrice") or row.get("ls")
+                )
+                quote_volume = base_volume * last_price if base_volume and last_price else 0.0
+            if quote_volume > 0:
                 for alias in aliases:
                     key = self._norm(alias)
                     if key:
@@ -249,11 +260,11 @@ class SymbolManager:
 
 
     async def _refresh_liquidity_ranking(self) -> None:
-        """Refresh volume telemetry without changing static symbol membership or order."""
+        """Refresh estimated turnover telemetry; static allowlist order remains authoritative."""
         ticker_rows = await self.rest.get_ticker()
         latest = self._ticker_liquidity(ticker_rows)
         if not latest:
-            logger.warning("Liquidity refresh returned no usable ticker volumes; retaining prior ranking")
+            logger.warning("Liquidity refresh returned no usable Futures turnover; retaining last valid filter snapshot")
             self._last_liquidity_refresh = (
                 __import__("time").time() - self._liquidity_refresh_seconds + 300
             )
@@ -271,19 +282,19 @@ class SymbolManager:
             )
         if not any(volume > 0 for volume in updated_liquidity.values()):
             logger.warning(
-                "Liquidity refresh did not match any discovered markets; retaining prior ranking"
+                "Liquidity refresh did not match any Futures markets; retaining last valid filter snapshot"
             )
             self._last_liquidity_refresh = (
                 __import__("time").time() - self._liquidity_refresh_seconds + 300
             )
             return
 
-        # Refresh volume telemetry only. Static allowlists determine membership
-        # and order; live volume never adds, reorders, or substitutes symbols.
+        # Refresh estimated USDT turnover only. Static allowlists determine
+        # candidate membership and order; the liquidity floor only excludes candidates.
         self.liquidity.update(updated_liquidity)
         for pair, volume in updated_liquidity.items():
             if volume <= 0:
-                self.skipped_reasons[pair] = "no matching positive ticker volume (static allowlist retained)"
+                self.skipped_reasons[pair] = "liquidity unknown; no matching Futures turnover data"
             else:
                 self.skipped_reasons.pop(pair, None)
         self._last_liquidity_refresh = __import__("time").time()
@@ -318,20 +329,57 @@ class SymbolManager:
                 existing["reason"] = reason
 
     def _select_active_symbols(self) -> None:
-        """Apply each engine's own liquidity ranking after excluding quarantined pairs."""
+        """Keep static ordering while enforcing per-engine minimum 24h turnover."""
         excluded = set(self._quarantined)
-        self.normal_symbols = [p for p in self._ranked_normal if p not in excluded][:max(1, int(settings.normal_symbol_limit))]
-        self.momentum_symbols = [p for p in self._ranked_momentum if p not in excluded][:max(1, int(settings.momentum_symbol_limit))]
+
+        def select(rank: List[str], limit: int, minimum: float, label: str) -> List[str]:
+            chosen: List[str] = []
+            for pair in rank:
+                if pair in excluded:
+                    continue
+                turnover = self.liquidity.get(pair, 0.0)
+                if turnover < minimum:
+                    reason = (
+                        f"liquidity unknown; no reliable Futures 24h quote-turnover estimate"
+                        if turnover <= 0 else
+                        f"estimated 24h Futures turnover {turnover:.0f} USDT below {minimum:.0f} USDT"
+                    )
+                    self.skipped_reasons[pair] = reason
+                    self.whitelist_diagnostics[self._norm(pair)] = {
+                        "configured_symbol": self._norm(pair),
+                        "status": "LIQUIDITY_UNKNOWN" if turnover <= 0 else "LOW_LIQUIDITY",
+                        "reason": reason,
+                        "estimated_24h_turnover_usdt": turnover,
+                        "minimum_24h_turnover_usdt": minimum,
+                    }
+                    continue
+                self.skipped_reasons.pop(pair, None)
+                self.whitelist_diagnostics.pop(self._norm(pair), None)
+                chosen.append(pair)
+                if len(chosen) >= max(1, int(limit)):
+                    break
+            logger.info(
+                f"{label.upper()}_LIQUIDITY_FILTER selected={len(chosen)}/{limit} "
+                f"minimum_24h_turnover_usdt={minimum:.0f}"
+            )
+            return chosen
+
+        self.normal_symbols = select(
+            self._ranked_normal, settings.normal_symbol_limit,
+            settings.normal_min_24h_turnover_usdt, "Normal",
+        )
+        self.momentum_symbols = select(
+            self._ranked_momentum, settings.momentum_symbol_limit,
+            settings.momentum_min_24h_turnover_usdt, "Momentum",
+        )
         selected = set(self.normal_symbols) | set(self.momentum_symbols)
-        # A recovered market may re-enter the active universe; clear its old
-        # quarantine/out-of-universe reason before rebuilding current skip state.
-        for pair in selected:
-            self.skipped_reasons.pop(pair, None)
         for pair, item in self._quarantined.items():
             retry_at = datetime.fromtimestamp(item["retry_at"], tz=timezone.utc).isoformat()
             self.skipped_reasons[pair] = f"temporarily quarantined until {retry_at}: {item['reason']}"
-            logger.info(f"MARKET_EXCLUDED {pair} normal={'yes' if pair in self._ranked_normal else 'no'} "
-                        f"momentum={'yes' if pair in self._ranked_momentum else 'no'} retry_at={retry_at}")
+            logger.info(
+                f"MARKET_EXCLUDED {pair} normal={'yes' if pair in self._ranked_normal else 'no'} "
+                f"momentum={'yes' if pair in self._ranked_momentum else 'no'} retry_at={retry_at}"
+            )
         for pair in self.valid_pairs - selected - excluded:
             self.skipped_reasons.setdefault(pair, "outside configured engine universe limit")
         logger.info(
