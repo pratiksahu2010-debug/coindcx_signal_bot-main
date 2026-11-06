@@ -14,6 +14,7 @@ class FakeRest:
 class FakeTelegram:
     def __init__(self):
         self.sent = []
+        self.admin_ids = [123]
 
     async def send_signal(self, signal):
         self.sent.append(dict(signal))
@@ -58,8 +59,16 @@ def test_pending_retest_promotes_once_only_inside_original_zone(monkeypatch):
         async def save(signal):
             return True
 
+        async def enqueue(signal, recipients):
+            return len(recipients)
+
+        async def outcome(signal, price, status):
+            return True
+
         monkeypatch.setattr(repositories, "claim_signal_once", claim)
+        monkeypatch.setattr(repositories, "enqueue_signal_deliveries", enqueue)
         monkeypatch.setattr(repositories, "save_signal", save)
+        monkeypatch.setattr(repositories, "record_signal_outcome", outcome)
         await engine._check_pending_retest("B-BTC_USDT", "normal")
         await engine._check_pending_retest("B-BTC_USDT", "normal")
         assert key not in engine.pending_retests
