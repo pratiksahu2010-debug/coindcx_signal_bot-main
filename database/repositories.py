@@ -343,3 +343,207 @@ async def release_signal_claim(signal: dict, candle_time_ms: int) -> bool:
             await session.rollback()
             logger.error(f"Signal claim release failed for {key}: {exc}")
             return False
+
+
+async def enqueue_signal_deliveries(signal: dict, recipient_ids: list[int]) -> int:
+    """Persist one independent Telegram outbox item per recipient."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    from database import db as database_db
+    from database.models import SignalDeliveryRecord
+
+    factory = database_db.SessionLocal
+    engine = database_db.engine
+    if factory is None or engine is None or not recipient_ids:
+        return 0
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    remaining = max(
+        1,
+        int(settings.max_signal_age_seconds - float(signal.get("signal_age_seconds", 0))),
+    )
+    next_attempt = now
+    key_base = ":".join(str(signal.get(k, "")) for k in (
+        "pair", "engine", "direction", "candle_time_ms"
+    ))
+    dialect = engine.dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    elif dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    else:
+        logger.error("Telegram outbox unsupported database dialect=%s", dialect)
+        return 0
+    values = []
+    for recipient in dict.fromkeys(int(x) for x in recipient_ids if int(x) > 0):
+        delivery_key = f"{key_base}:{recipient}"
+        payload = {"signal": signal, "chat_id": recipient,
+                   "expires_at": (now + timedelta(seconds=remaining)).isoformat()}
+        values.append({
+            "delivery_key": delivery_key,
+            "payload": json.dumps(payload, default=str),
+            "status": "pending",
+            "attempts": 0,
+            "next_attempt_at": next_attempt,
+            "last_error": "",
+            "updated_at": now,
+        })
+    if not values:
+        return 0
+    async with factory() as session:
+        try:
+            statement = insert(SignalDeliveryRecord).values(values).on_conflict_do_nothing(
+                index_elements=[SignalDeliveryRecord.delivery_key]
+            )
+            result = await session.execute(statement)
+            await session.commit()
+            return int(result.rowcount or 0)
+        except Exception as exc:
+            await session.rollback()
+            logger.error("Telegram outbox enqueue failed: %s", exc)
+            return 0
+
+
+async def claim_due_signal_deliveries(limit: int = 20, lease_seconds: int = 90) -> list[dict]:
+    """Atomically lease due outbox rows; stale leases are recovered after crashes."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import select, or_
+    from database import db as database_db
+    from database.models import SignalDeliveryRecord
+
+    factory = database_db.SessionLocal
+    if factory is None:
+        return []
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    stale_lease = now - timedelta(seconds=max(30, int(lease_seconds)))
+    async with factory() as session:
+        try:
+            query = (
+                select(SignalDeliveryRecord)
+                .where(or_(
+                    ((SignalDeliveryRecord.status.in_(( "pending", "retry" )))
+                     & (SignalDeliveryRecord.next_attempt_at <= now)),
+                    ((SignalDeliveryRecord.status == "sending")
+                     & (SignalDeliveryRecord.updated_at <= stale_lease)),
+                ))
+                .order_by(SignalDeliveryRecord.next_attempt_at.asc())
+                .limit(max(1, min(int(limit), 100)))
+                .with_for_update(skip_locked=True)
+            )
+            result = await session.execute(query)
+            rows = result.scalars().all()
+            claimed = []
+            for row in rows:
+                try:
+                    payload = json.loads(row.payload or "{}")
+                    if not isinstance(payload, dict) or not payload.get("chat_id") or not isinstance(payload.get("signal"), dict):
+                        row.status = "failed"
+                        row.last_error = "invalid outbox payload"
+                        row.updated_at = now
+                        continue
+                    row.status = "sending"
+                    row.attempts = int(row.attempts or 0) + 1
+                    row.updated_at = now
+                    claimed.append({
+                        "delivery_key": row.delivery_key,
+                        "attempts": row.attempts,
+                        **payload,
+                    })
+                except (TypeError, ValueError):
+                    row.status = "failed"
+                    row.last_error = "malformed outbox JSON"
+                    row.updated_at = now
+            await session.commit()
+            return claimed
+        except Exception as exc:
+            await session.rollback()
+            logger.error("Telegram outbox claim failed: %s", exc)
+            return []
+
+
+async def complete_signal_delivery(delivery_key: str) -> bool:
+    from datetime import datetime, timezone
+    from database import db as database_db
+    from database.models import SignalDeliveryRecord
+    factory = database_db.SessionLocal
+    if factory is None:
+        return False
+    async with factory() as session:
+        try:
+            row = await session.get(SignalDeliveryRecord, delivery_key)
+            if row is None:
+                return False
+            row.status = "delivered"
+            row.last_error = ""
+            row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await session.commit()
+            return True
+        except Exception as exc:
+            await session.rollback()
+            logger.error("Telegram outbox completion failed: %s", exc)
+            return False
+
+
+async def retry_signal_delivery(delivery_key: str, error: str, attempts: int, max_attempts: int = 8) -> bool:
+    from datetime import datetime, timedelta, timezone
+    from database import db as database_db
+    from database.models import SignalDeliveryRecord
+    factory = database_db.SessionLocal
+    if factory is None:
+        return False
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    terminal = int(attempts) >= max(1, int(max_attempts))
+    delay = min(60, 2 ** min(max(1, int(attempts)), 6))
+    async with factory() as session:
+        try:
+            row = await session.get(SignalDeliveryRecord, delivery_key)
+            if row is None:
+                return False
+            row.status = "failed" if terminal else "retry"
+            row.last_error = str(error)[:2000]
+            row.next_attempt_at = now + timedelta(seconds=delay)
+            row.updated_at = now
+            await session.commit()
+            return True
+        except Exception as exc:
+            await session.rollback()
+            logger.error("Telegram outbox retry update failed: %s", exc)
+            return False
+
+
+async def expire_stale_signal_deliveries(limit: int = 100) -> int:
+    """Expire pending items whose original signal validity window has passed."""
+    import json
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from database import db as database_db
+    from database.models import SignalDeliveryRecord
+    factory = database_db.SessionLocal
+    if factory is None:
+        return 0
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    async with factory() as session:
+        try:
+            result = await session.execute(select(SignalDeliveryRecord).where(
+                SignalDeliveryRecord.status.in_(("pending", "retry"))
+            ).limit(max(1, min(int(limit), 500))))
+            count = 0
+            for row in result.scalars().all():
+                try:
+                    payload = json.loads(row.payload or "{}")
+                    expiry = datetime.fromisoformat(str(payload.get("expires_at", "")))
+                    if expiry <= now:
+                        row.status = "expired"
+                        row.last_error = "signal entry window expired before Telegram delivery"
+                        row.updated_at = now
+                        count += 1
+                except (TypeError, ValueError):
+                    row.status = "failed"
+                    row.last_error = "invalid expiry in outbox payload"
+                    row.updated_at = now
+            await session.commit()
+            return count
+        except Exception as exc:
+            await session.rollback()
+            logger.error("Telegram outbox expiry sweep failed: %s", exc)
+            return 0
