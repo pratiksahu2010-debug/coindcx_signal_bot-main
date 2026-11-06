@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from config import settings
 from utils.logger import logger
 from utils.memory_monitor import check_memory
+from utils.time_utils import parse_interval
 from exchange.coindcx_rest import CoinDCXRest
 from exchange.symbol_manager import SymbolManager
 from exchange.candle_builder import CandleBuilder
@@ -18,8 +19,33 @@ from tgbot.bot import TelegramBot
 from database.db import init_db, dispose_db
 
 
+def validate_runtime_config() -> None:
+    """Fail fast on invalid timeframe and safety-critical runtime settings."""
+    primary = parse_interval(settings.candle_primary_tf)
+    confirm = parse_interval(settings.candle_confirm_tf)
+    if confirm <= primary:
+        raise ValueError("CANDLE_CONFIRM_TF must be greater than CANDLE_PRIMARY_TF")
+    if settings.candle_close_grace_seconds < 0:
+        raise ValueError("CANDLE_CLOSE_GRACE_SECONDS cannot be negative")
+    if settings.max_signal_age_seconds <= 0:
+        raise ValueError("MAX_SIGNAL_AGE_SECONDS must be positive")
+    if settings.max_candles_buffer < 50:
+        raise ValueError("MAX_CANDLES_BUFFER must be at least 50")
+    if settings.normal_symbol_limit < 1 or settings.momentum_symbol_limit < 1:
+        raise ValueError("Normal and Momentum symbol limits must be positive")
+    if not 0.0 <= settings.signal_threshold <= 10.0:
+        raise ValueError("SIGNAL_THRESHOLD must be between 0 and 10")
+    if not 0.0 < settings.normal_rvol_min:
+        raise ValueError("NORMAL_RVOL_MIN must be positive")
+    if not 0.0 <= settings.normal_adx_min <= 100.0:
+        raise ValueError("NORMAL_ADX_MIN must be between 0 and 100")
+    if not 0.0 <= settings.momentum_adx_explosion <= 100.0:
+        raise ValueError("MOMENTUM_ADX_MIN must be between 0 and 100")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    validate_runtime_config()
     logger.info("=== CoinDCX Signal Bot v2.0 starting ===")
     start_time = datetime.now(timezone.utc)
 
