@@ -113,3 +113,17 @@ def test_rejects_narrow_candle_even_when_other_indicators_align():
         atr_expansion=1.10,
         structure_break=True,
     ))
+
+
+def test_continuation_uses_configured_momentum_adx_threshold(monkeypatch):
+    from config import settings
+    from strategies.momentum.volatility_expansion import evaluate
+
+    old = settings.momentum_adx_explosion
+    try:
+        settings.momentum_adx_explosion = 22.0
+        assert not evaluate({"atr_expansion": 1.3, "adx": 21.9})
+        assert evaluate({"atr_expansion": 1.3, "adx": 22.0})
+        assert not evaluate({"atr_expansion": 1.3, "adx": float("inf")})
+    finally:
+        settings.momentum_adx_explosion = old
