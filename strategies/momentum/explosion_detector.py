@@ -27,7 +27,7 @@ def evaluate(indicators: dict) -> bool:
     extension = _number(indicators, "ema_extension_atr", 0.0)
     direction = str(indicators.get("direction", "")).upper()
 
-    if rvol < 1.35 or atr_expansion < 1.08 or body < 0.45:
+    if atr_expansion < 1.08 or body < 0.45:
         return False
 
     # Reject candles that do not close decisively in the direction of travel.
@@ -54,6 +54,20 @@ def evaluate(indicators: dict) -> bool:
         or atr_expansion >= 1.20
     )
     if not range_expansion:
+        return False
+
+    # Keep 1.5x as the normal participation floor. Permit a lower 1.30x
+    # reading only when a real swing break arrives with unusually large range
+    # and stronger ATR expansion; this catches early ignition without treating
+    # ordinary low-volume candles as explosions.
+    strong_early_breakout = bool(
+        rvol >= 1.30
+        and indicators.get("structure_break")
+        and range_atr is not None
+        and range_atr >= 1.35
+        and atr_expansion >= 1.15
+    )
+    if rvol < 1.50 and not strong_early_breakout:
         return False
 
     squeeze_release = bool(indicators.get("squeeze_release"))
