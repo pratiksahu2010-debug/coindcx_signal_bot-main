@@ -1228,12 +1228,9 @@ class SignalEngine:
                     persisted_signal = self.signals[engine].get(pair, engine, direction)
                     if persisted_signal:
                         try:
-                            from database.repositories import save_signal, record_signal_outcome
+                            from database.repositories import save_signal
                             if not await save_signal(persisted_signal):
                                 logger.error("ACTIVE_SIGNAL_PERSIST_FAILED %s engine=%s", pair, engine)
-                            await record_signal_outcome(
-                                persisted_signal, float(signal.get("live_price") or signal.get("price") or 0), "ACTIVE"
-                            )
                         except Exception as exc:
                             logger.error("ACTIVE_SIGNAL_PERSIST_ERROR %s: %s", pair, exc)
                 else:
@@ -1422,11 +1419,10 @@ class SignalEngine:
             queued = await self._queue_telegram_signal(signal)
             if queued:
                 self.cooldowns[engine].set(pair, engine, direction)
-                from database.repositories import save_signal, record_signal_outcome
+                from database.repositories import save_signal
                 active = self.signals[engine].get(pair, engine, direction) or signal
                 if not await save_signal(active):
                     logger.error(f"RETEST_ACTIVE_SIGNAL_PERSIST_FAILED {key}")
-                await record_signal_outcome(signal, float(delivery_price), "ACTIVE")
                 logger.info(f"RETEST_SIGNAL_QUEUED {key} price={delivery_price}")
             else:
                 self.signals[engine].invalidate(pair, engine, direction)
