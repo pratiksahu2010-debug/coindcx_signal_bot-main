@@ -1415,22 +1415,15 @@ class SignalEngine:
                     logger.error(f"RETEST_CLAIM_RELEASE_FAILED {key}: {exc}")
                 await remove("active_capacity_or_duplicate")
                 continue
-            delivered = False
-            if self.telegram:
-                try:
-                    delivered = bool(await self.telegram.send_signal(signal))
-                except Exception as exc:
-                    logger.error(f"RETEST_TELEGRAM_ERROR {key}: {exc}")
-            if delivered:
+            queued = await self._queue_telegram_signal(signal)
+            if queued:
                 self.cooldowns[engine].set(pair, engine, direction)
                 from database.repositories import save_signal, record_signal_outcome
                 active = self.signals[engine].get(pair, engine, direction) or signal
                 if not await save_signal(active):
                     logger.error(f"RETEST_ACTIVE_SIGNAL_PERSIST_FAILED {key}")
-                else:
-                    logger.info(f"RETEST_ACTIVE_SIGNAL_PERSISTED {key}")
                 await record_signal_outcome(signal, float(delivery_price), "ACTIVE")
-                logger.info(f"RETEST_SIGNAL_DELIVERED {key} price={delivery_price}")
+                logger.info(f"RETEST_SIGNAL_QUEUED {key} price={delivery_price}")
             else:
                 self.signals[engine].invalidate(pair, engine, direction)
                 self.telegram_delivery_failures += 1
@@ -1439,9 +1432,9 @@ class SignalEngine:
                     await release_signal_claim(signal, int(pending["candle_ts"]))
                 except Exception as exc:
                     logger.error(f"RETEST_CLAIM_RELEASE_FAILED {key}: {exc}")
-                logger.warning(f"RETEST_SIGNAL_NOT_DELIVERED {key}; candidate remains retryable")
+                logger.warning(f"RETEST_SIGNAL_NOT_QUEUED {key}; candidate remains retryable")
                 continue
-            await remove("delivered")
+            await remove("queued")
 
     def _log_candle_evaluation(
         self, pair: str, engine: str, direction: str, candle_ts: int,
