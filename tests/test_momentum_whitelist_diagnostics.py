@@ -11,7 +11,7 @@ class FakeRest:
         return self.details
 
     async def get_ticker(self):
-        return []
+        return [{"market": "B-BTC_USDT", "base_volume": "10000", "last_price": "1000"}]
 
 
 def test_momentum_whitelist_reports_not_listed_and_inactive_symbols(monkeypatch):
