@@ -37,6 +37,7 @@ class TelegramDeliveryWorker:
             complete_signal_delivery,
             retry_signal_delivery,
             expire_signal_delivery,
+            expire_stale_signal_deliveries,
         )
         await expire_stale_signal_deliveries()
         items = await claim_due_signal_deliveries(self.batch_size)
