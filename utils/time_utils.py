@@ -1,5 +1,6 @@
 """Time utilities — always UTC."""
 from datetime import datetime, timezone, timedelta
+import re
 from typing import Optional, Union
 
 
@@ -25,17 +26,23 @@ def dt_to_ms(dt: datetime) -> int:
 
 
 def parse_interval(interval: str) -> timedelta:
-    unit = interval[-1]
-    value = int(interval[:-1])
+    """Parse a positive candle interval such as 5m, 15m, 1h, or 1d."""
+    if not isinstance(interval, str):
+        raise ValueError(f"Invalid interval: {interval!r}")
+    match = re.fullmatch(r"(\d+)([mhdw])", interval.strip().lower())
+    if not match:
+        raise ValueError(f"Unsupported interval: {interval}")
+    value = int(match.group(1))
+    unit = match.group(2)
+    if value <= 0:
+        raise ValueError(f"Interval must be positive: {interval}")
     if unit == "m":
         return timedelta(minutes=value)
     if unit == "h":
         return timedelta(hours=value)
     if unit == "d":
         return timedelta(days=value)
-    if unit == "w":
-        return timedelta(weeks=value)
-    raise ValueError(f"Unsupported interval: {interval}")
+    return timedelta(weeks=value)
 
 
 def floor_to_interval(dt: datetime, interval: str) -> datetime:
