@@ -16,6 +16,7 @@ from exchange.candle_builder import CandleBuilder
 from exchange.coindcx_ws import CoinDCXFuturesStream
 from core.engine import SignalEngine
 from tgbot.bot import TelegramBot
+from tgbot.delivery_worker import TelegramDeliveryWorker
 from database.db import init_db, dispose_db
 
 
@@ -94,6 +95,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.websocket = ws_stream
     app.state.engine = engine
     app.state.telegram = tg
+    app.state.telegram_delivery_worker = delivery_worker
     app.state.start_time = start_time
     app.state.bot_state = {
         "websocket_status": (
@@ -124,9 +126,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # expose an explicit degraded state until database initialization succeeds.
     scan_task = None
     retest_task = None
+    telegram_delivery_task = None
+    delivery_worker = TelegramDeliveryWorker(tg)
     if database_ready:
         scan_task = asyncio.create_task(engine.run_scan_loop(app))
         retest_task = asyncio.create_task(engine.pending_retest_monitor_loop(interval_seconds=2.0))
+        if tg.bot and tg.admin_ids:
+            telegram_delivery_task = asyncio.create_task(delivery_worker.run_forever())
     else:
         app.state.bot_state["normal_engine"] = "paused_database_unavailable"
         app.state.bot_state["momentum_engine"] = "paused_database_unavailable"
@@ -146,7 +152,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     logger.info("Shutting down...")
-    for task in (scan_task, retest_task):
+    delivery_worker.stop()
+    for task in (scan_task, retest_task, telegram_delivery_task):
         if task is not None:
             task.cancel()
             try:
