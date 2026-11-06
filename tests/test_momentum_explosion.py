@@ -127,3 +127,23 @@ def test_continuation_uses_configured_momentum_adx_threshold(monkeypatch):
         assert not evaluate({"atr_expansion": 1.3, "adx": float("inf")})
     finally:
         settings.momentum_adx_explosion = old
+
+
+def test_directional_volume_spike_is_a_valid_momentum_state():
+    from strategies.momentum.strategy_manager import detect_momentum_state
+    from core.engine import VALID_MOMENTUM_STATES
+
+    indicators = {
+        "direction": "LONG", "rvol": 1.6, "atr_expansion": 1.0,
+        "body_ratio": 0.50, "close_location": 0.70,
+        "directional_volume_proxy_ok": True, "ema_extension_atr": 0.5,
+        "atr": 10.0, "high": 112.0, "low": 100.0,
+        "squeeze_release": False, "compression_active": False,
+        "bw_expand": False, "structure_break": False,
+        "roc_direction_ok": False, "macd_accel": False,
+        "macd_direction_ok": True, "rsi_accel": False,
+        "ema_aligned": False, "adx": 20.0,
+    }
+    state = detect_momentum_state(indicators)
+    assert state == "VOLUME_SPIKE"
+    assert state in VALID_MOMENTUM_STATES
