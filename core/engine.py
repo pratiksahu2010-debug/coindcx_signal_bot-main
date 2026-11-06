@@ -1261,7 +1261,11 @@ class SignalEngine:
 
     async def _queue_telegram_signal(self, signal: dict) -> bool:
         """Persist one delivery per admin before treating an alert as accepted."""
-        if not self.telegram or not getattr(self.telegram, "admin_ids", None):
+        if (
+            not self.telegram
+            or not getattr(self.telegram, "bot", None)
+            or not getattr(self.telegram, "admin_ids", None)
+        ):
             logger.warning("TELEGRAM_OUTBOX_NOT_QUEUED reason=no_bot_or_recipients")
             return False
         try:
