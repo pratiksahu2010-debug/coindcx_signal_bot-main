@@ -126,6 +126,14 @@ else:
             self.atr_min_pct = 0.3
 
         @property
+        def signal_only(self) -> bool:
+            return True
+
+        @property
+        def orders_enabled(self) -> bool:
+            return False
+
+        @property
         def admin_ids(self) -> List[int]:
             if not self.telegram_admin_ids.strip():
                 return []
