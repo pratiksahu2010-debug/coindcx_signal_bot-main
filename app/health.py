@@ -44,17 +44,8 @@ async def health(request: Request):
 
 @router.api_route("/ping", methods=["GET", "HEAD"], response_class=Response)
 async def ping() -> Response:
-    """Tiny process-liveness response for external cron and Render probes.
-
-    Keep this endpoint independent of database, exchange, scanner, and Telegram
-    state so monitoring services receive only a two-byte response.
-    """
-    return Response(
-        content="ok",
-        status_code=200,
-        media_type="text/plain",
-        headers={"Cache-Control": "no-store"},
-    )
+    """Silent process-liveness endpoint for keep-alive requests only."""
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/status")
