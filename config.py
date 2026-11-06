@@ -50,8 +50,22 @@ if HAS_PYDANTIC:
         candle_close_grace_seconds: int = Field(default=3, alias="CANDLE_CLOSE_GRACE_SECONDS")
         max_signal_age_seconds: int = Field(default=120, alias="MAX_SIGNAL_AGE_SECONDS")
         futures_round_trip_cost_bps: float = Field(default=15.0, alias="FUTURES_ROUND_TRIP_COST_BPS")
+        orb_enabled: bool = Field(default=True, alias="ORB_ENABLED")
+        orb_london_enabled: bool = Field(default=True, alias="ORB_LONDON_ENABLED")
+        orb_new_york_enabled: bool = Field(default=True, alias="ORB_NEW_YORK_ENABLED")
+        orb_min_rvol: float = Field(default=1.30, alias="ORB_MIN_RVOL")
+        orb_max_extension_atr: float = Field(default=0.80, alias="ORB_MAX_EXTENSION_ATR")
+        orb_active_minutes: int = Field(default=180, alias="ORB_ACTIVE_MINUTES")
         rvol_min: float = 1.2
         atr_min_pct: float = 0.3
+
+        @property
+        def signal_only(self) -> bool:
+            return True
+
+        @property
+        def orders_enabled(self) -> bool:
+            return False
 
         @property
         def admin_ids(self) -> List[int]:
@@ -102,6 +116,12 @@ else:
             self.candle_close_grace_seconds = int(os.getenv("CANDLE_CLOSE_GRACE_SECONDS", "3"))
             self.max_signal_age_seconds = int(os.getenv("MAX_SIGNAL_AGE_SECONDS", "120"))
             self.futures_round_trip_cost_bps = float(os.getenv("FUTURES_ROUND_TRIP_COST_BPS", "15.0"))
+            self.orb_enabled = os.getenv("ORB_ENABLED", "true").lower() == "true"
+            self.orb_london_enabled = os.getenv("ORB_LONDON_ENABLED", "true").lower() == "true"
+            self.orb_new_york_enabled = os.getenv("ORB_NEW_YORK_ENABLED", "true").lower() == "true"
+            self.orb_min_rvol = float(os.getenv("ORB_MIN_RVOL", "1.30"))
+            self.orb_max_extension_atr = float(os.getenv("ORB_MAX_EXTENSION_ATR", "0.80"))
+            self.orb_active_minutes = int(os.getenv("ORB_ACTIVE_MINUTES", "180"))
             self.rvol_min = 1.2
             self.atr_min_pct = 0.3
 
