@@ -1,4 +1,4 @@
-"""Static CoinDCX USDT Futures allowlists with live exchange-availability validation."""
+"""Static CoinDCX USDT Futures allowlists with live availability and turnover filters."""
 import re
 import time
 import yaml
@@ -212,9 +212,9 @@ class SymbolManager:
         self.whitelist_diagnostics.clear()
 
         def rank_universe(preferences: Dict[str, int], limit: int, label: str) -> List[str]:
-            # Static allowlist order is authoritative for every engine. CoinDCX
-            # active Futures data only validates availability; ticker volume
-            # never adds, reorders, or substitutes symbols.
+            # Static allowlist order is authoritative for every engine. Active
+            # Futures data validates availability; turnover may exclude a thin
+            # candidate but never adds, reorders, or substitutes symbols.
             configured = list(preferences.keys())
             available_by_key = {self._norm(pair): pair for pair in self.valid_pairs}
             selected: List[str] = []
