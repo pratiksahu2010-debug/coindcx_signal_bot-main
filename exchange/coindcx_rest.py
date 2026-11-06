@@ -180,8 +180,23 @@ class CoinDCXRest:
             if self._ticker_snapshot is not None and now - self._ticker_snapshot_at <= 1.0:
                 return self._ticker_snapshot
             data = await self._get(f"{self.public}/market_data/v3/current_prices/futures/rt")
-            fallback_ts = data.get("ts") if isinstance(data, dict) else None
-            payload = data.get("prices", data.get("data", data)) if isinstance(data, dict) else data
+            fallback_ts = None
+            payload = data
+            # Accept direct and nested API envelopes such as
+            # {ts, prices}, {data: {ts, prices}}, or {data: {ts, market: quote}}.
+            for _ in range(3):
+                if not isinstance(payload, dict):
+                    break
+                candidate_ts = payload.get("ts") or payload.get("timestamp")
+                if candidate_ts is not None:
+                    fallback_ts = candidate_ts
+                if isinstance(payload.get("prices"), (dict, list)):
+                    payload = payload["prices"]
+                    break
+                if isinstance(payload.get("data"), (dict, list)):
+                    payload = payload["data"]
+                    continue
+                break
             rows: List[Dict] = []
             if isinstance(payload, dict):
                 for market, quote in payload.items():
@@ -355,8 +370,18 @@ class CoinDCXRest:
             "to": int(end_ms / 1000), "resolution": resolution, "pcode": "f",
         }
         data = await self._get(f"{self.public}/market_data/candlesticks", params=params)
-        if isinstance(data, dict):
-            data = data.get("data", data.get("candles", []))
+        payload = data
+        for _ in range(3):
+            if not isinstance(payload, dict):
+                break
+            if isinstance(payload.get("candles"), list):
+                payload = payload["candles"]
+                break
+            if isinstance(payload.get("data"), (dict, list)):
+                payload = payload["data"]
+                continue
+            break
+        data = payload
         if not isinstance(data, list):
             return []
         normalized = []
