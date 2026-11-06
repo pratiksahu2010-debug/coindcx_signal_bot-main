@@ -87,3 +87,39 @@ def test_pending_retest_expires_without_requesting_price():
         assert key not in engine.pending_retests
 
     asyncio.run(run())
+
+
+def test_pending_retest_persistence_exception_fails_closed(monkeypatch):
+    from database import repositories
+
+    async def run():
+        engine = SignalEngine(FakeRest([]), object(), object())
+        key = "B-BTC_USDT:normal:LONG"
+        pending = {"signal": {"pair": "B-BTC_USDT", "engine": "normal", "direction": "LONG"}}
+
+        async def fail_save(candidate_key, record):
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(repositories, "save_pending_retest", fail_save)
+        assert not await engine._persist_pending_retest_candidate(key, pending)
+        assert key not in engine.pending_retests
+
+    asyncio.run(run())
+
+
+def test_pending_retest_false_persistence_result_fails_closed(monkeypatch):
+    from database import repositories
+
+    async def run():
+        engine = SignalEngine(FakeRest([]), object(), object())
+        key = "B-ETH_USDT:momentum:SHORT"
+        pending = {"signal": {"pair": "B-ETH_USDT", "engine": "momentum", "direction": "SHORT"}}
+
+        async def reject_save(candidate_key, record):
+            return False
+
+        monkeypatch.setattr(repositories, "save_pending_retest", reject_save)
+        assert not await engine._persist_pending_retest_candidate(key, pending)
+        assert key not in engine.pending_retests
+
+    asyncio.run(run())
