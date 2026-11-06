@@ -47,7 +47,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 ## Timeframe
 - Primary: **5m** (entries)
 - Confirmation: **15m**
-- Scan every 60s for closed candles
+- Evaluate once per completed 5-minute candle after the configured close grace; the separate pending-retest monitor checks fresh LTP every 2 seconds
 
 ## Important
 - Free tier spins down after ~15 min idle — use external `/ping` cron
