@@ -234,7 +234,7 @@ class SymbolManager:
                     f"{label.upper()}_STATIC_SYMBOLS_UNAVAILABLE count={len(missing)} "
                     f"symbols={','.join(missing)}"
                 )
-            return selected[:max(1, int(limit))]
+            return selected
 
         self._ranked_normal = rank_universe(normal_rank, settings.normal_symbol_limit, "Normal")
         self._ranked_momentum = rank_universe(momentum_rank, settings.momentum_symbol_limit, "Momentum")
@@ -278,20 +278,13 @@ class SymbolManager:
             )
             return
 
-        self.liquidity.update(updated_liquidity)
-        for pair, volume in updated_liquidity.items():
-            if volume <= 0:
-                self.skipped_reasons[pair] = "no matching positive ticker volume"
-            else:
-                self.skipped_reasons.pop(pair, None)
-
-        # Refresh diagnostics/volume telemetry only. The static YAML allowlists
-        # determine membership and order; live volume must not reorder symbols.
+        # Refresh volume telemetry only. Static allowlists determine membership
+        # and order; live volume never adds, reorders, or substitutes symbols.
         self.liquidity.update(updated_liquidity)
         for pair, volume in updated_liquidity.items():
             if volume <= 0:
                 self.skipped_reasons[pair] = "no matching positive ticker volume (static allowlist retained)"
-            elif pair in self.valid_pairs:
+            else:
                 self.skipped_reasons.pop(pair, None)
         self._last_liquidity_refresh = __import__("time").time()
         self._select_active_symbols()
