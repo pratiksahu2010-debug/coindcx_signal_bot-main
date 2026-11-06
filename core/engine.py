@@ -1370,6 +1370,13 @@ class SignalEngine:
             if (price <= stop if direction == "LONG" else price >= stop):
                 await remove("stop_invalidated")
                 continue
+            existing_signal = self.signals[engine].get(pair, engine, direction)
+            if (
+                (existing_signal and existing_signal.get("status") == "active")
+                or self.cooldowns[engine].is_cooling(pair, engine, direction)
+            ):
+                await remove("active_signal_or_cooldown")
+                continue
             if classify_entry_state(price, pending["entry"], pending["zone_low"], pending["zone_high"], direction) != "IMMEDIATE":
                 continue
             try:
@@ -1402,6 +1409,16 @@ class SignalEngine:
             if not claimed:
                 await remove("duplicate")
                 continue
+            signal_added = self.signals[engine].add(signal)
+            await self._persist_evicted_signals(engine)
+            if not signal_added:
+                try:
+                    from database.repositories import release_signal_claim
+                    await release_signal_claim(signal, int(pending["candle_ts"]))
+                except Exception as exc:
+                    logger.error(f"RETEST_CLAIM_RELEASE_FAILED {key}: {exc}")
+                await remove("active_capacity_or_duplicate")
+                continue
             delivered = False
             if self.telegram:
                 try:
@@ -1409,19 +1426,17 @@ class SignalEngine:
                 except Exception as exc:
                     logger.error(f"RETEST_TELEGRAM_ERROR {key}: {exc}")
             if delivered:
-                signal_added = self.signals[engine].add(signal)
-                await self._persist_evicted_signals(engine)
-                if signal_added:
-                    self.cooldowns[engine].set(pair, engine, direction)
-                    from database.repositories import save_signal, record_signal_outcome
-                    active = self.signals[engine].get(pair, engine, direction) or signal
-                    if not await save_signal(active):
-                        logger.error(f"RETEST_ACTIVE_SIGNAL_PERSIST_FAILED {key}")
-                    else:
-                        logger.info(f"RETEST_ACTIVE_SIGNAL_PERSISTED {key}")
-                    await record_signal_outcome(signal, float(delivery_price), "ACTIVE")
+                self.cooldowns[engine].set(pair, engine, direction)
+                from database.repositories import save_signal, record_signal_outcome
+                active = self.signals[engine].get(pair, engine, direction) or signal
+                if not await save_signal(active):
+                    logger.error(f"RETEST_ACTIVE_SIGNAL_PERSIST_FAILED {key}")
+                else:
+                    logger.info(f"RETEST_ACTIVE_SIGNAL_PERSISTED {key}")
+                await record_signal_outcome(signal, float(delivery_price), "ACTIVE")
                 logger.info(f"RETEST_SIGNAL_DELIVERED {key} price={delivery_price}")
             else:
+                self.signals[engine].invalidate(pair, engine, direction)
                 self.telegram_delivery_failures += 1
                 try:
                     from database.repositories import release_signal_claim
