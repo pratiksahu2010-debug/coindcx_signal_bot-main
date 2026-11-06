@@ -430,13 +430,30 @@ async def claim_due_signal_deliveries(limit: int = 20, lease_seconds: int = 90) 
     stale_lease = now - timedelta(seconds=max(30, int(lease_seconds)))
     async with factory() as session:
         try:
+            # A process crash can leave a row leased in "sending". Recover
+            # it after the lease expires, but do not retry indefinitely.
+            from sqlalchemy import update
+            await session.execute(
+                update(SignalDeliveryRecord)
+                .where(
+                    SignalDeliveryRecord.status == "sending",
+                    SignalDeliveryRecord.updated_at <= stale_lease,
+                    SignalDeliveryRecord.attempts >= 8,
+                )
+                .values(
+                    status="failed",
+                    last_error="maximum delivery attempts exhausted after worker lease expired",
+                    updated_at=now,
+                )
+            )
             query = (
                 select(SignalDeliveryRecord)
                 .where(or_(
-                    ((SignalDeliveryRecord.status.in_(( "pending", "retry" )))
+                    ((SignalDeliveryRecord.status.in_(("pending", "retry")))
                      & (SignalDeliveryRecord.next_attempt_at <= now)),
                     ((SignalDeliveryRecord.status == "sending")
-                     & (SignalDeliveryRecord.updated_at <= stale_lease)),
+                     & (SignalDeliveryRecord.updated_at <= stale_lease)
+                     & (SignalDeliveryRecord.attempts < 8)),
                 ))
                 .order_by(SignalDeliveryRecord.next_attempt_at.asc())
                 .limit(max(1, min(int(limit), 100)))
