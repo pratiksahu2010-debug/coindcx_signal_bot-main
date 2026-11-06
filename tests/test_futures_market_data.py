@@ -416,3 +416,26 @@ def test_futures_ws_candle_parser_recovers_full_pair_from_channel_and_normalizes
     assert interval == "5m"
     assert candle["time"] == base * 1000
     assert stream._last_event_ms == (base + 300) * 1000
+
+
+def test_futures_ws_candle_parser_reads_channel_from_outer_event_envelope():
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    class CandleStub:
+        def __init__(self):
+            self.rows = []
+
+        def on_candle(self, pair, interval, candle):
+            self.rows.append((pair, interval, candle))
+
+    builder = CandleStub()
+    stream = CoinDCXFuturesStream(builder, CoinDCXRest())
+    stream._handle_candlestick({
+        "channel": "candlestick@B-ETH_USDT_5m-futures",
+        "data": {
+            "open_time": 1_800_000_000,
+            "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10,
+        },
+    })
+    assert len(builder.rows) == 1
+    assert builder.rows[0][0:2] == ("B-ETH_USDT", "5m")
