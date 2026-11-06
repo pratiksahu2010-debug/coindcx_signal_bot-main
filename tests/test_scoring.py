@@ -265,3 +265,19 @@ def test_orb_scoring_preserves_zero_close_location_and_zero_extension():
     extension = next(c for c in result.components if c.name == "ORB Entry Distance")
     assert location.points == 1.25
     assert extension.points == 2.0
+
+
+def test_normal_adx_score_rewards_di_alignment_without_rejecting_opposition():
+    engine = ScoringEngine()
+    base = {
+        "close": 102.0, "ema9": 101.0, "ema21": 100.0, "vwap": 101.0,
+        "adx": 32.0, "rsi": 58.0, "rvol": 1.8, "atr_pct": 0.9,
+        "body_ratio": 0.7, "confirm_15m": True, "structure_direction_ok": True,
+    }
+    aligned = engine.score_normal({**base, "di_direction_ok": True}, "LONG")
+    opposed = engine.score_normal({**base, "di_direction_ok": False}, "LONG")
+    aligned_adx = next(c for c in aligned.components if c.name == "ADX")
+    opposed_adx = next(c for c in opposed.components if c.name == "ADX")
+    assert aligned_adx.points > opposed_adx.points
+    # DI opposition reduces quality; it does not become an extra hard gate.
+    assert opposed_adx.points > 0
