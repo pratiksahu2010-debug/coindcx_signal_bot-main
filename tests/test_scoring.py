@@ -212,3 +212,56 @@ def test_normal_rvol_gate_rejects_nonfinite_and_nonpositive_thresholds():
         {"rvol": 2.0, "directional_volume_proxy_ok": True}, "LONG", 0.0
     )["relative_volume"] is False
 
+
+
+def test_normal_reversal_rsi_gate_accepts_improving_extreme_readings():
+    from core.engine import _normal_threshold_gates
+
+    long_reversal = {
+        "ema9": 101.0, "ema21": 100.0, "close": 102.0, "vwap": 101.0,
+        "adx": 25.0, "confirm_15m": True, "rsi": 38.0, "rsi_prev": 35.0,
+        "directional_candle": True,
+    }
+    short_reversal = {
+        "ema9": 99.0, "ema21": 100.0, "close": 98.0, "vwap": 99.0,
+        "adx": 25.0, "confirm_15m": True, "rsi": 62.0, "rsi_prev": 65.0,
+        "directional_candle": True,
+    }
+    assert all(_normal_threshold_gates(long_reversal, "LONG", 25.0, strategy="REVERSAL").values())
+    assert all(_normal_threshold_gates(short_reversal, "SHORT", 25.0, strategy="REVERSAL").values())
+
+
+def test_normal_reversal_rsi_gate_rejects_non_improving_extreme_readings():
+    from core.engine import _normal_threshold_gates
+
+    indicators = {
+        "ema9": 101.0, "ema21": 100.0, "close": 102.0, "vwap": 101.0,
+        "adx": 25.0, "confirm_15m": True, "rsi": 38.0, "rsi_prev": 39.0,
+        "directional_candle": True,
+    }
+    assert not _normal_threshold_gates(
+        indicators, "LONG", 25.0, strategy="REVERSAL"
+    )["rsi_direction"]
+
+
+def test_normal_reversal_receives_rsi_score_when_recovering_from_extreme():
+    engine = ScoringEngine()
+    result = engine.score_normal({
+        "close": 102.0, "ema9": 101.0, "ema21": 100.0, "vwap": 101.0,
+        "adx": 30.0, "rsi": 38.0, "rsi_prev": 35.0,
+    }, "LONG")
+    rsi_component = next(c for c in result.components if c.name == "RSI")
+    assert rsi_component.points == 10.0 / 9.0
+    assert "reversal improving" in rsi_component.explanation
+
+
+def test_orb_scoring_preserves_zero_close_location_and_zero_extension():
+    result = ScoringEngine().score_orb({
+        "rvol": 2.0, "body_ratio": 0.8, "close_location": 0.0,
+        "orb_breakout_extension_atr": 0.0, "orb_range_width_atr": 0.8,
+        "ema_aligned": True, "macd_direction_ok": True, "roc_direction_ok": True,
+    }, "SHORT")
+    location = next(c for c in result.components if c.name == "ORB Close Location")
+    extension = next(c for c in result.components if c.name == "ORB Entry Distance")
+    assert location.points == 1.25
+    assert extension.points == 2.0
