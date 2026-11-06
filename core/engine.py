@@ -316,7 +316,6 @@ class SignalEngine:
                         continue
                     signal = pending.get("signal", {})
                     await self._check_pending_retest(signal.get("pair", ""), signal.get("engine", ""))
-                    self.pending_retest_checks += 1
                     await asyncio.sleep(0.05)
             except asyncio.CancelledError:
                 raise
@@ -424,6 +423,11 @@ class SignalEngine:
                     else "no_symbols" if settings.enable_momentum_engine else "disabled"
                 )
                 state["last_market_update"] = utc_iso(finished)
+                websocket = getattr(app.state, "websocket", None)
+                if websocket is not None:
+                    state["websocket_status"] = websocket.status
+                    state["ws_reconnects"] = websocket.reconnect_count
+                    state["ws_price_feed_age_seconds"] = websocket.price_feed_age_seconds
                 state["uptime_seconds"] = int(
                     (finished - app.state.start_time).total_seconds()
                 )
