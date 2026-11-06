@@ -548,3 +548,26 @@ async def expire_stale_signal_deliveries(limit: int = 100) -> int:
             await session.rollback()
             logger.error("Telegram outbox expiry sweep failed: %s", exc)
             return 0
+
+
+async def expire_signal_delivery(delivery_key: str) -> bool:
+    from datetime import datetime, timezone
+    from database import db as database_db
+    from database.models import SignalDeliveryRecord
+    factory = database_db.SessionLocal
+    if factory is None:
+        return False
+    async with factory() as session:
+        try:
+            row = await session.get(SignalDeliveryRecord, delivery_key)
+            if row is None:
+                return False
+            row.status = "expired"
+            row.last_error = "signal entry window expired before Telegram delivery"
+            row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await session.commit()
+            return True
+        except Exception as exc:
+            await session.rollback()
+            logger.error("Telegram outbox expiry update failed: %s", exc)
+            return False
