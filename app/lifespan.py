@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if database_ready:
         await tg.start()
     engine.set_telegram(tg)
+    delivery_worker = TelegramDeliveryWorker(tg)
 
     app.state.rest = rest
     app.state.symbol_mgr = symbol_mgr
@@ -135,7 +136,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     scan_task = None
     retest_task = None
     telegram_delivery_task = None
-    delivery_worker = TelegramDeliveryWorker(tg)
     if database_ready:
         scan_task = asyncio.create_task(engine.run_scan_loop(app))
         retest_task = asyncio.create_task(engine.pending_retest_monitor_loop(interval_seconds=2.0))
