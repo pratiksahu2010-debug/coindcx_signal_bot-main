@@ -51,8 +51,7 @@ def test_normal_five_condition_gate_long_and_short():
         "ema9": 101.0, "ema21": 100.0,
         "close": 102.0, "vwap": 101.0,
         "adx": 25.0, "confirm_15m": True,
-        "rsi": 50.1,
-        # Candle shape is intentionally absent; it is not a gate.
+        "rsi": 50.1, "directional_candle": True,
     }
     assert all(_normal_threshold_gates(long_indicators, "LONG", 25.0).values())
 
@@ -60,7 +59,7 @@ def test_normal_five_condition_gate_long_and_short():
         "ema9": 99.0, "ema21": 100.0,
         "close": 98.0, "vwap": 99.0,
         "adx": 25.0, "confirm_15m": True,
-        "rsi": 49.9,
+        "rsi": 49.9, "directional_candle": True,
     }
     assert all(_normal_threshold_gates(short_indicators, "SHORT", 25.0).values())
 
@@ -72,7 +71,7 @@ def test_normal_five_condition_gate_rejects_each_missing_confirmation():
         "ema9": 101.0, "ema21": 100.0,
         "close": 102.0, "vwap": 101.0,
         "adx": 25.0, "confirm_15m": True,
-        "rsi": 55.0,
+        "rsi": 55.0, "directional_candle": True,
     }
     assert all(_normal_threshold_gates(base, "LONG", 25.0).values())
 
@@ -82,6 +81,7 @@ def test_normal_five_condition_gate_rejects_each_missing_confirmation():
         ("adx", 24.99),
         ("confirm_15m", False),
         ("rsi", 50.0),
+        ("directional_candle", False),
     ):
         changed = dict(base)
         changed[key] = value
