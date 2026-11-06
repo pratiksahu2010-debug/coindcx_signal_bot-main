@@ -1,6 +1,7 @@
 """Candle buffer management — bounded rolling windows."""
 from collections import deque
 from typing import Dict, Deque, List, Optional
+from math import isfinite
 import numpy as np
 
 from config import settings
@@ -17,6 +18,28 @@ class CandleBuffer:
         required = ("time", "open", "high", "low", "close", "volume")
         if any(k not in candle or candle[k] is None for k in required):
             return False
+        try:
+            normalized = {
+                "time": int(candle["time"]),
+                "open": float(candle["open"]),
+                "high": float(candle["high"]),
+                "low": float(candle["low"]),
+                "close": float(candle["close"]),
+                "volume": float(candle["volume"]),
+            }
+        except (TypeError, ValueError, OverflowError):
+            return False
+        prices = (normalized["open"], normalized["high"], normalized["low"], normalized["close"])
+        if (
+            normalized["time"] < 0
+            or not all(isfinite(value) for value in (*prices, normalized["volume"]))
+            or any(value <= 0 for value in prices)
+            or normalized["volume"] < 0
+            or normalized["high"] < max(normalized["open"], normalized["close"], normalized["low"])
+            or normalized["low"] > min(normalized["open"], normalized["close"], normalized["high"])
+        ):
+            return False
+        candle = normalized
         if not self.candles:
             self.candles.append(dict(candle))
             return True
@@ -24,7 +47,7 @@ class CandleBuffer:
         if last.get("time") == candle.get("time"):
             self.candles[-1] = dict(candle)
             return False
-        if (candle.get("time") or 0) > (last.get("time") or 0):
+        if candle["time"] > (last.get("time") or 0):
             self.candles.append(dict(candle))
             return True
         return False
