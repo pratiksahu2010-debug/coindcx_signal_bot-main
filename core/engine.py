@@ -631,10 +631,10 @@ class SignalEngine:
             "rsi_prev": rsi(close[:-1],14),
         }
 
-        # ORB owns a fixed 5-minute Futures feed, independent of the configurable
-        # Momentum primary timeframe. Its opening range is three completed 5m bars.
+        # Evaluate independent London and New York ORBs on completed 5m Futures bars.
+        # IANA time zones in orb_detector handle UK/US daylight-saving changes.
         orb_result = {}
-        if engine == "momentum":
+        if engine == "momentum" and settings.orb_enabled:
             try:
                 orb_data = await self.rest.get_candles(pair, "5m", limit=PRIMARY_CANDLE_HISTORY)
                 if len(orb_data) >= 25:
@@ -644,10 +644,35 @@ class SignalEngine:
                     orb_atr = atr(orb_arr["high"], orb_arr["low"], orb_arr["close"], 14)
                     orb_avg_volume = float(np.mean(orb_arr["volume"][-21:-1]))
                     orb_rvol = float(orb_arr["volume"][-1] / orb_avg_volume) if orb_avg_volume > 0 else None
-                    orb_result = orb_detector.evaluate(orb_arr, orb_atr, orb_rvol)
+                    session_names = []
+                    if settings.orb_london_enabled:
+                        session_names.append("london")
+                    if settings.orb_new_york_enabled:
+                        session_names.append("new_york")
+                    results = [
+                        orb_detector.evaluate(
+                            orb_arr, orb_atr, orb_rvol, session=session_name,
+                            min_rvol=settings.orb_min_rvol,
+                            max_extension_atr=settings.orb_max_extension_atr,
+                            active_minutes=settings.orb_active_minutes,
+                        )
+                        for session_name in session_names
+                    ]
+                    valid = [item for item in results
+                             if item.get("state") in ("ORB_BREAKOUT", "ORB_RETEST")]
+                    if valid:
+                        # If both qualify on one candle, prefer the newer session's range.
+                        orb_result = max(valid, key=lambda item: item.get("session_start_utc_ms", 0))
+                    elif results:
+                        orb_result = max(results, key=lambda item: item.get("session_start_utc_ms", 0))
             except Exception as exc:
-                logger.warning(f"ORB_5M_DATA_UNAVAILABLE {pair}: {exc}")
+                logger.warning(f"ORB_DUAL_SESSION_DATA_UNAVAILABLE {pair}: {exc}")
         indicators["orb_state"] = orb_result.get("state")
+        indicators["orb_session"] = orb_result.get("session")
+        indicators["orb_session_timezone"] = orb_result.get("session_timezone")
+        indicators["orb_session_open_local"] = orb_result.get("session_open_local")
+        indicators["orb_range_start_local"] = orb_result.get("range_start_local")
+        indicators["orb_range_end_local"] = orb_result.get("range_end_local")
         indicators["orb_range_high"] = orb_result.get("range_high")
         indicators["orb_range_low"] = orb_result.get("range_low")
         indicators["orb_breakout_level"] = orb_result.get("breakout_level")
