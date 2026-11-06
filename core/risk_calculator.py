@@ -1,6 +1,7 @@
 """Structure-aware ATR risk levels for signal-only alerts."""
 from typing import Optional
 from dataclasses import dataclass
+import math
 from config import settings
 
 @dataclass
@@ -13,7 +14,21 @@ def calculate_risk(price: float, atr: float, direction: str, atr_mult_sl: float=
                    atr_mult_tp1: float=1.5, atr_mult_tp2: float=2.5, atr_mult_tp3: float=4.0,
                    swing_low: Optional[float]=None, swing_high: Optional[float]=None,
                    cost_bps: Optional[float]=None) -> Optional[RiskLevels]:
-    if not price or not atr or price<=0 or atr<=0 or direction not in ("LONG","SHORT"): return None
+    try:
+        price = float(price)
+        atr = float(atr)
+        atr_mult_sl = float(atr_mult_sl)
+        reward_multipliers = tuple(float(x) for x in (atr_mult_tp1, atr_mult_tp2, atr_mult_tp3))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if (
+        direction not in ("LONG", "SHORT")
+        or not all(math.isfinite(x) for x in (price, atr, atr_mult_sl, *reward_multipliers))
+        or price <= 0 or atr <= 0 or atr_mult_sl <= 0
+        or any(x <= 0 for x in reward_multipliers)
+        or not (reward_multipliers[0] < reward_multipliers[1] < reward_multipliers[2])
+    ):
+        return None
     is_long=direction=="LONG"
     # Structural stop with an ATR safety buffer; reject pathological distant structure.
     if is_long:
@@ -21,14 +36,16 @@ def calculate_risk(price: float, atr: float, direction: str, atr_mult_sl: float=
         sl=max(price-atr*2.5, min(price-atr*0.8, structural))
         if sl>=price: sl=price-atr*atr_mult_sl
         risk=price-sl
-        targets=[price+1.5*risk,price+2.5*risk,price+4.0*risk]
+        # Legacy parameter names are retained for compatibility; targets are R-multiples.
+        targets=[price+multiplier*risk for multiplier in reward_multipliers]
         zone=(price-0.15*atr,price+0.10*atr)
     else:
         structural=(swing_high+0.15*atr) if swing_high and swing_high>price else price+atr*atr_mult_sl
         sl=min(price+atr*2.5, max(price+atr*0.8, structural))
         if sl<=price: sl=price+atr*atr_mult_sl
         risk=sl-price
-        targets=[price-1.5*risk,price-2.5*risk,price-4.0*risk]
+        # Legacy parameter names are retained for compatibility; targets are R-multiples.
+        targets=[price-multiplier*risk for multiplier in reward_multipliers]
         zone=(price-0.10*atr,price+0.15*atr)
     if risk<=0: return None
     # Configurable round-trip fee/slippage allowance in basis points.
@@ -38,7 +55,6 @@ def calculate_risk(price: float, atr: float, direction: str, atr_mult_sl: float=
         configured_bps = float(configured_bps)
     except (TypeError, ValueError, OverflowError):
         return None
-    import math
     if configured_bps < 0 or not math.isfinite(configured_bps):
         return None
     cost_per_unit = price * configured_bps / 10_000.0
