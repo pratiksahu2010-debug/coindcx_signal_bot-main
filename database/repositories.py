@@ -364,10 +364,15 @@ async def enqueue_signal_deliveries(signal: dict, recipient_ids: list[int]) -> i
     if signal.get("entry_type") == "RETEST_CONFIRMED":
         remaining = int(settings.max_signal_age_seconds)
     else:
-        remaining = max(
-            1,
-            int(settings.max_signal_age_seconds - float(signal.get("signal_age_seconds", 0))),
+        remaining = int(
+            settings.max_signal_age_seconds - float(signal.get("signal_age_seconds", 0))
         )
+    if remaining <= 0:
+        logger.warning(
+            "Telegram outbox rejected stale signal pair=%s age_seconds=%s",
+            signal.get("pair"), signal.get("signal_age_seconds"),
+        )
+        return 0
     next_attempt = now
     key_base = ":".join(str(signal.get(k, "")) for k in (
         "pair", "engine", "direction", "candle_time_ms"
@@ -544,6 +549,8 @@ async def expire_stale_signal_deliveries(limit: int = 100) -> int:
                 try:
                     payload = json.loads(row.payload or "{}")
                     expiry = datetime.fromisoformat(str(payload.get("expires_at", "")))
+                    if expiry.tzinfo is not None:
+                        expiry = expiry.astimezone(timezone.utc).replace(tzinfo=None)
                     if expiry <= now:
                         row.status = "expired"
                         row.last_error = "signal entry window expired before Telegram delivery"
