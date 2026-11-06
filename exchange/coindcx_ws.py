@@ -33,6 +33,7 @@ class CoinDCXFuturesStream:
         self._running = False
         self._connected = False
         self._last_event_ms: Optional[int] = None
+        self._reconnect_count = 0
         self.on_candle_callback = None
         self._register_handlers()
 
@@ -53,6 +54,8 @@ class CoinDCXFuturesStream:
         @self.client.event
         async def disconnect():
             self._connected = False
+            if self._running:
+                self._reconnect_count += 1
             # The server drops all channel memberships with the transport.
             # Keep desired channels so the next connect event can restore them.
             self._subscribed_channels.clear()
@@ -221,6 +224,10 @@ class CoinDCXFuturesStream:
     @property
     def status(self) -> str:
         return "connected" if self._connected else ("reconnecting" if self._running else "stopped")
+
+    @property
+    def reconnect_count(self) -> int:
+        return self._reconnect_count
 
     @property
     def price_feed_age_seconds(self) -> Optional[float]:
