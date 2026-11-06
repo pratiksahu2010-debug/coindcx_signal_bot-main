@@ -291,3 +291,19 @@ def test_momentum_macd_direction_gets_partial_credit_before_acceleration():
     component = next(c for c in aligned.components if c.name == "MACD Accel")
     assert component.points == 0.5
     assert component.valid
+
+
+def test_normal_adx_rising_is_a_soft_quality_bonus():
+    engine = ScoringEngine()
+    base = {
+        "close": 102.0, "ema9": 101.0, "ema21": 100.0, "vwap": 101.0,
+        "adx": 27.0, "rsi": 58.0, "rvol": 1.8, "atr_pct": 0.9,
+        "body_ratio": 0.7, "confirm_15m": True, "structure_direction_ok": True,
+        "di_direction_ok": True,
+    }
+    flat = engine.score_normal({**base, "adx_rising": False}, "LONG")
+    rising = engine.score_normal({**base, "adx_rising": True}, "LONG")
+    flat_adx = next(c for c in flat.components if c.name == "ADX")
+    rising_adx = next(c for c in rising.components if c.name == "ADX")
+    assert rising_adx.points > flat_adx.points
+    assert rising_adx.points <= rising_adx.max_points
