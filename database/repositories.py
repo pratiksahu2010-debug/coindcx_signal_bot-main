@@ -351,6 +351,7 @@ async def enqueue_signal_deliveries(signal: dict, recipient_ids: list[int]) -> i
     from datetime import datetime, timedelta, timezone
     from database import db as database_db
     from database.models import SignalDeliveryRecord
+    from config import settings
 
     factory = database_db.SessionLocal
     engine = database_db.engine
