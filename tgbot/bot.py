@@ -271,6 +271,18 @@ class TelegramBot:
         ]
         return "\n".join(rows)
 
+    async def send_signal_to_chat(self, signal: Dict[str, Any], chat_id: int) -> bool:
+        """Deliver one outbox item to exactly one Telegram recipient."""
+        if not self.bot:
+            raise RuntimeError("Telegram bot is not initialized")
+        await self.bot.send_message(
+            chat_id=int(chat_id),
+            text=self.format_signal(signal),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        return True
+
     async def send_signal(self, signal: Dict[str, Any]) -> bool:
         """Push a signal to configured admins; return True if at least one delivery succeeds."""
         if not self.bot:
