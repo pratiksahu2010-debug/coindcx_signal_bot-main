@@ -116,9 +116,9 @@ def test_dynamic_symbol_universe_uses_ticker_liquidity_and_active_status(monkeyp
 
         async def get_ticker(self):
             return [
-                {"market": "B-BTC_USDT", "volume": "10", "last_price": "100"},
-                {"market": "B-ETH_USDT", "volume": "20", "last_price": "10"},
-                {"market": "B-LOW_USDT", "volume": "1", "last_price": "1"},
+                {"market": "B-BTC_USDT", "base_volume": "10", "last_price": "100"},
+                {"market": "B-ETH_USDT", "base_volume": "20", "last_price": "10"},
+                {"market": "B-LOW_USDT", "base_volume": "1", "last_price": "1"},
             ]
 
     async def run():
@@ -150,10 +150,10 @@ def test_dynamic_symbol_universe_excludes_stablecoin_pairs(monkeypatch):
 
         async def get_ticker(self):
             return [
-                {"market": "B-BTC_USDT", "volume": "10", "last_price": "100"},
-                {"market": "B-USDC_USDT", "volume": "1000000", "last_price": "1"},
-                {"market": "B-DAI_USDT", "volume": "500000", "last_price": "1"},
-                {"market": "B-ETH_USDT", "volume": "20", "last_price": "10"},
+                {"market": "B-BTC_USDT", "base_volume": "10", "last_price": "100"},
+                {"market": "B-USDC_USDT", "base_volume": "1000000", "last_price": "1"},
+                {"market": "B-DAI_USDT", "base_volume": "500000", "last_price": "1"},
+                {"market": "B-ETH_USDT", "base_volume": "20", "last_price": "10"},
             ]
 
     async def run():
@@ -828,3 +828,49 @@ def test_candle_buffer_rejects_nonfinite_and_inconsistent_ohlc():
     assert not buffer.update({**valid, "time": 4000, "volume": -1})
     assert len(buffer) == 1
     assert buffer.last_close() == 11.0
+
+
+def test_futures_turnover_estimate_uses_base_volume_times_last_price():
+    from exchange.symbol_manager import SymbolManager
+
+    manager = SymbolManager(object())
+    values = manager._ticker_liquidity([
+        {"market": "B-ETH_USDT", "base_volume": "25000", "last_price": "3.2"},
+        {"market": "B-LOW_USDT", "v": "100", "ls": "0.5"},
+        # A generic volume without an LTP is not treated as USDT turnover.
+        {"market": "B-UNKNOWN_USDT", "volume": "999999999"},
+    ])
+    assert values["ETHUSDT"] == 80000.0
+    assert values["LOWUSDT"] == 50.0
+    assert "UNKNOWNUSDT" not in values
+
+
+def test_static_universe_fails_closed_when_turnover_data_is_missing(monkeypatch):
+    import asyncio
+    from exchange.symbol_manager import SymbolManager
+
+    monkeypatch.setattr("config.settings.normal_min_24h_turnover_usdt", 1000.0)
+    monkeypatch.setattr("config.settings.momentum_min_24h_turnover_usdt", 500.0)
+    monkeypatch.setattr(
+        SymbolManager, "_load_yaml",
+        lambda self, path: ["B-BTC_USDT"],
+    )
+
+    class FakeRest:
+        async def get_market_details(self):
+            return [{
+                "pair": "B-BTC_USDT", "base_currency_short_name": "USDT",
+                "target_currency_short_name": "BTC", "status": "active",
+            }]
+
+        async def get_ticker(self):
+            return []
+
+    async def run():
+        manager = SymbolManager(FakeRest())
+        await manager.load_and_validate()
+        assert manager.normal_symbols == []
+        assert manager.momentum_symbols == []
+        assert manager.whitelist_diagnostics["BTCUSDT"]["status"] == "LIQUIDITY_UNKNOWN"
+
+    asyncio.run(run())
