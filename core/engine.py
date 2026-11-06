@@ -222,7 +222,7 @@ class SignalEngine:
                 return
             self.watchlists["momentum"].add({
                 "pair": pair, "display": self.symbols.display_name(pair),
-                "direction": None, "engine": "momentum",
+                "direction": direction, "engine": "momentum",
                 "strategy": "INTRABAR_PRESETUP", "score": 5.5,
                 "grade": "WATCHLIST", "price": live_close,
                 "indicators": {"live_rvol": round(rvol_live, 3),
@@ -606,7 +606,8 @@ class SignalEngine:
                                (close[-1] > resistance or close[-1] < support))
 
         indicators = {
-            "direction": direction,
+            # Direction is resolved after ORB and ROC evaluation below.
+            "direction": None,
             "close": close[-1],
             "ema9": ema9,
             "ema21": ema21,
@@ -965,9 +966,16 @@ class SignalEngine:
             result = (
                 self.momentum_scoring.score_orb(indicators, direction)
                 if momentum_state in ("ORB_BREAKOUT", "ORB_RETEST")
+                else self.momentum_scoring.score_momentum_explosion(indicators, direction)
+                if momentum_state == "EXPLOSION"
                 else self.momentum_scoring.score_momentum(indicators, direction)
             )
             strategy = momentum_state
+
+        # Build score detail before any branch can log a low-scoring result.
+        score_parts = ",".join(
+            f"{c.name}:{c.points:g}/{c.max_points:g}" for c in result.components
+        )
 
         # Enforce the configured quality floor for both engines. The Normal
         # engine's hard gates are necessary but not sufficient without score quality.
@@ -981,9 +989,6 @@ class SignalEngine:
             self._last_processed.setdefault(engine, {})[pair] = candle_ts
             return
 
-        score_parts = ",".join(
-            f"{c.name}:{c.points:g}/{c.max_points:g}" for c in result.components
-        )
         if engine == "momentum" and result.total < 5.5:
             self._log_candle_evaluation(
                 pair, engine, direction, candle_ts, candle_close_ms,
