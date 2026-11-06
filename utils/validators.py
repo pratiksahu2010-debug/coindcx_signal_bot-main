@@ -1,4 +1,5 @@
 """Input validation helpers."""
+import math
 import re
 from typing import Optional
 
@@ -16,7 +17,7 @@ def normalize_pair(pair: str) -> Optional[str]:
     if not pair:
         return None
     p = pair.strip().upper().replace("/", "_")
-    if not p.startswith("B-") and "_" in p:
+    if not p.startswith(("B-", "I-", "HB-", "KC-")) and "_" in p:
         # assume B- prefix for Binance-sourced
         parts = p.split("_")
         if len(parts) == 2:
@@ -26,6 +27,7 @@ def normalize_pair(pair: str) -> Optional[str]:
 
 def safe_float(val, default: float = 0.0) -> float:
     try:
-        return float(val)
-    except (TypeError, ValueError):
+        value = float(val)
+        return value if math.isfinite(value) else default
+    except (TypeError, ValueError, OverflowError):
         return default
