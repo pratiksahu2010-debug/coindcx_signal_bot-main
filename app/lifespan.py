@@ -31,26 +31,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.exception(f"Database initialization failed: {exc}")
 
     rest = CoinDCXRest()
-    await rest.start()
+    # Do not open exchange or Telegram connections when durable deduplication
+    # storage is unavailable: scans are paused, so those connections would only
+    # consume resources and could misleadingly look like a functioning bot.
+    if database_ready:
+        await rest.start()
 
     symbol_mgr = SymbolManager(rest)
-    try:
-        await symbol_mgr.load_and_validate()
-    except Exception as e:
-        logger.error(f"Symbol validation failed: {e}")
+    if database_ready:
+        try:
+            await symbol_mgr.load_and_validate()
+        except Exception as e:
+            logger.error(f"Symbol validation failed: {e}")
 
     candle_builder = CandleBuilder()
     ws_stream = CoinDCXFuturesStream(candle_builder, rest)
-    ws_started = await ws_stream.start(set(symbol_mgr.normal_symbols + symbol_mgr.momentum_symbols))
+    ws_started = (
+        await ws_stream.start(set(symbol_mgr.normal_symbols + symbol_mgr.momentum_symbols))
+        if database_ready else False
+    )
     engine = SignalEngine(rest, symbol_mgr, candle_builder)
     ws_stream.set_candle_callback(engine.on_intrabar_candle)
     if database_ready:
         await engine.restore_active_signals()
         await engine.restore_pending_retests()
 
-    # Telegram
+    # Telegram is also kept offline while scans are paused.
     tg = TelegramBot()
-    await tg.start()
+    if database_ready:
+        await tg.start()
     engine.set_telegram(tg)
 
     app.state.rest = rest
@@ -61,7 +70,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.telegram = tg
     app.state.start_time = start_time
     app.state.bot_state = {
-        "websocket_status": ws_stream.status if ws_started else ("rest_fallback" if settings.enable_websocket else "disabled_rest_mode"),
+        "websocket_status": (
+            "paused_database_unavailable" if not database_ready
+            else ws_stream.status if ws_started
+            else ("rest_fallback" if settings.enable_websocket else "disabled_rest_mode")
+        ),
         "normal_engine": "starting" if settings.enable_normal_engine else "disabled",
         "momentum_engine": "starting" if settings.enable_momentum_engine else "disabled",
         "last_market_update": None,
@@ -96,7 +109,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "health endpoints remain available, no market scans or alerts will run"
         )
 
-    logger.info("Startup complete. Engines ready." )
+    if database_ready and symbol_mgr.valid_pairs:
+        logger.info("Startup complete. Durable database and active market universe ready.")
+    elif not database_ready:
+        logger.warning("Startup degraded: database unavailable; exchange feeds and scans remain paused.")
+    else:
+        logger.error("Startup degraded: no eligible active USDT Futures symbols; scans have no universe.")
     check_memory()
 
     yield
