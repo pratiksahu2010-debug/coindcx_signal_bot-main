@@ -4,6 +4,7 @@
 
 ## Features
 - Normal Engine (trend / pullback / breakout) + Momentum Explosion Engine
+- Dual-session crypto ORB: London 08:00 Europe/London and New York 09:30 America/New_York with 15-minute opening ranges and DST-aware clocks
 - 10-point scoring, ATR risk (SL / TP1 / TP2 / TP3)
 - Interactive Telegram signals to admin IDs
 - FastAPI health: `/health` `/ping` `/status` `/metrics`
@@ -81,3 +82,16 @@ Production requires PostgreSQL. SQLite is supported only for local development b
 5. Keep one Render instance and one Uvicorn worker initially. Confirm pending retests and signal deduplication survive a restart. CI exercises simultaneous duplicate claims and concurrent pending-retest upserts against PostgreSQL.
 
 The Render blueprint deliberately leaves `DATABASE_URL` unsynced so it cannot silently fall back to an ephemeral SQLite file. PostgreSQL provisioning and any associated billing remain an explicit Render dashboard action.
+
+
+## Dual-session crypto ORB
+
+- ORB evaluates London and New York independently on completed 5-minute CoinDCX Futures candles.
+- London opens at 08:00 Europe/London; New York opens at 09:30 America/New_York. IANA time zones automatically handle UK/US daylight-saving changes.
+- Each opening range is the first three 5-minute candles (15 minutes). Breakout evaluation begins only after the range is complete.
+- Fresh breakout candidates are accepted for up to 180 minutes after the opening range closes, subject to RVOL >= 1.30, directional candle/body quality, and maximum 0.80 ATR extension.
+- Missing opening-range candles invalidate that session's ORB rather than constructing a partial range.
+- If both sessions qualify on one scan, the newer session's candidate takes precedence; a valid London candidate remains eligible while New York is still building its range.
+- Telegram ORB alerts identify the session and local opening time.
+- Both sessions are enabled by default. Set ORB_LONDON_ENABLED or ORB_NEW_YORK_ENABLED to false to disable one.
+- Application safety is enforced in config.py: settings.signal_only is always true and settings.orders_enabled is always false. No order-placement code is introduced.
