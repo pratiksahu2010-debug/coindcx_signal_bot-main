@@ -55,6 +55,16 @@ class TelegramDeliveryWorker:
                 if await complete_signal_delivery(key):
                     sent += 1
                     self.delivered += 1
+                    try:
+                        from database.repositories import record_signal_outcome
+                        signal = item["signal"]
+                        entry_price = float(
+                            signal.get("live_price") or signal.get("price") or 0
+                        )
+                        if entry_price > 0:
+                            await record_signal_outcome(signal, entry_price, "ACTIVE")
+                    except Exception:
+                        logger.exception("Signal outcome recording failed for outbox key=%s", key)
                     logger.info(
                         "TELEGRAM_OUTBOX_DELIVERED key=%s chat_id=%s attempt=%s",
                         key, item["chat_id"], item.get("attempts", 0),
