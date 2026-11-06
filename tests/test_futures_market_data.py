@@ -346,6 +346,7 @@ async def test_futures_ws_resubscribes_all_channels_after_reconnect(monkeypatch)
     # Simulate an unexpected disconnect and the automatic Socket.IO reconnect.
     await socket.handlers["disconnect"]()
     assert stream._subscribed_channels == set()
+    assert stream.reconnect_count == 1
     socket.connected = True
     await socket.handlers["connect"]()
 
