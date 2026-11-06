@@ -95,3 +95,17 @@ The Render blueprint deliberately leaves `DATABASE_URL` unsynced so it cannot si
 - Telegram ORB alerts identify the session and local opening time.
 - Both sessions are enabled by default. Set ORB_LONDON_ENABLED or ORB_NEW_YORK_ENABLED to false to disable one.
 - Application safety is enforced in config.py: settings.signal_only is always true and settings.orders_enabled is always false. No order-placement code is introduced.
+
+
+### Static universe and liquidity protection
+
+The Normal and Momentum/ORB YAML files remain static candidate allowlists (40 and 80 entries respectively). At startup and every 15 minutes, active CoinDCX USDT Futures candidates must also pass a minimum estimated 24-hour quote-turnover floor:
+
+- Normal: `NORMAL_MIN_24H_TURNOVER_USDT=1000000`
+- Momentum and ORB: `MOMENTUM_MIN_24H_TURNOVER_USDT=500000`
+
+CoinDCX's Futures current-prices feed documents `v` as 24-hour base volume and `ls` as last price. The bot estimates USDT turnover as `v × ls`; this is a liquidity proxy, not exact trade-by-trade quote notional. Missing turnover data fails closed. The static YAML order is preserved; candidates are excluded rather than dynamically re-ranked or replaced.
+
+### Telegram delivery reliability
+
+Confirmed signals are written to a database-backed outbox, one row per configured admin. A background worker retries transient delivery failures with bounded exponential backoff while the original signal entry-validity window remains open. Expired alerts are not sent late. Delivery is at-least-once: a rare process crash after Telegram accepts a message but before the database records success can cause a duplicate on retry. PostgreSQL is required for durable Render production operation; local SQLite is for development only.
