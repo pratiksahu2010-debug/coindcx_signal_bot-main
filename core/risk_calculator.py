@@ -31,9 +31,17 @@ def calculate_risk(price: float, atr: float, direction: str, atr_mult_sl: float=
         targets=[price-1.5*risk,price-2.5*risk,price-4.0*risk]
         zone=(price-0.10*atr,price+0.15*atr)
     if risk<=0: return None
-    # Conservative combined round-trip fee/slippage allowance (15 bps).
+    # Configurable round-trip fee/slippage allowance in basis points.
     # Keep gross target levels intact for display; use net reward for validation.
-    cost_per_unit = price * 0.0015
+    configured_bps = settings.futures_round_trip_cost_bps if cost_bps is None else cost_bps
+    try:
+        configured_bps = float(configured_bps)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    import math
+    if configured_bps < 0 or not math.isfinite(configured_bps):
+        return None
+    cost_per_unit = price * configured_bps / 10_000.0
     rrs=[max(0.0, abs(t-price)-cost_per_unit)/risk for t in targets]
     return RiskLevels(round(price,8),round(zone[0],8),round(zone[1],8),round(sl,8),
         round(targets[0],8),round(targets[1],8),round(targets[2],8),round(risk/price*100,4),
