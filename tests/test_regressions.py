@@ -294,6 +294,11 @@ def test_stale_market_quarantine_filters_both_engine_universes_and_restores(monk
         lambda self, path: ["B-BAD_USDT", "B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT"],
     )
 
+    old_normal_floor = settings.normal_min_24h_turnover_usdt
+    old_momentum_floor = settings.momentum_min_24h_turnover_usdt
+    settings.normal_min_24h_turnover_usdt = 1.0
+    settings.momentum_min_24h_turnover_usdt = 1.0
+
     class FakeRest:
         def __init__(self):
             self.stale = {"B-BAD_USDT": {"5m": 2, "15m": 1}}
@@ -308,7 +313,7 @@ def test_stale_market_quarantine_filters_both_engine_universes_and_restores(monk
 
         async def get_ticker(self):
             return [
-                {"market": f"B-{name}_USDT", "volume": str(volume), "last_price": "10"}
+                {"market": f"B-{name}_USDT", "base_volume": str(volume), "last_price": "10"}
                 for name, volume in (("BAD", 1000), ("BTC", 900), ("ETH", 800), ("SOL", 700))
             ]
 
@@ -351,6 +356,8 @@ def test_stale_market_quarantine_filters_both_engine_universes_and_restores(monk
             assert "B-BAD_USDT" not in manager.skipped_reasons
         finally:
             settings.normal_symbol_limit, settings.momentum_symbol_limit = old_normal, old_momentum
+            settings.normal_min_24h_turnover_usdt = old_normal_floor
+            settings.momentum_min_24h_turnover_usdt = old_momentum_floor
 
     asyncio.run(run())
 
@@ -604,9 +611,11 @@ def test_tp_outcome_is_persisted_only_once_per_target(monkeypatch):
     asyncio.run(run())
 
 
-def test_liquidity_universe_reorders_when_24h_volume_changes(monkeypatch):
+def test_liquidity_universe_preserves_static_order_when_24h_volume_changes(monkeypatch):
     import asyncio
     from exchange.symbol_manager import SymbolManager
+    monkeypatch.setattr("config.settings.normal_min_24h_turnover_usdt", 1.0)
+    monkeypatch.setattr("config.settings.momentum_min_24h_turnover_usdt", 1.0)
 
     # Both engines retain the configured static order even when live volume changes.
     monkeypatch.setattr(
@@ -626,7 +635,7 @@ def test_liquidity_universe_reorders_when_24h_volume_changes(monkeypatch):
             ]
         async def get_ticker(self):
             return [
-                {"market": f"{name}USDT", "volume": str(volume), "last_price": "10"}
+                {"market": f"{name}USDT", "base_volume": str(volume), "last_price": "10"}
                 for name, volume in self.volumes.items()
             ]
 
