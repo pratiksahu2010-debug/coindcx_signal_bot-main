@@ -307,3 +307,15 @@ def test_normal_adx_rising_is_a_soft_quality_bonus():
     rising_adx = next(c for c in rising.components if c.name == "ADX")
     assert rising_adx.points > flat_adx.points
     assert rising_adx.points <= rising_adx.max_points
+
+
+def test_normal_reversal_strategy_classifier_can_reach_reversal_branch():
+    from strategies.normal.strategy_manager import detect_strategy
+
+    indicators = {
+        "close": 102.0, "ema9": 101.0, "ema21": 100.0, "ema50": None,
+        "vwap": 101.0, "rsi": 38.0, "rsi_prev": 35.0,
+        "body_ratio": 0.30, "rvol": 1.0, "adx": 25.0,
+        "resistance": 105.0, "support": 98.0, "close_location": 0.70,
+    }
+    assert detect_strategy(indicators, "LONG") == "REVERSAL"
