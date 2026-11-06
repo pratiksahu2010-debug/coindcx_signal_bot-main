@@ -119,9 +119,20 @@ class ScoringEngine:
         expl = "N/A"
         if rsi_v is not None:
             aligned = (rsi_v > 50.0) if is_long else (rsi_v < 50.0)
+            rsi_previous = indicators.get("rsi_prev")
+            reversal_aligned = (
+                rsi_previous is not None
+                and ((rsi_v < 40.0 and rsi_v >= rsi_previous) if is_long
+                     else (rsi_v > 60.0 and rsi_v <= rsi_previous))
+            )
             if aligned:
                 pts = w["rsi"]
                 expl = f"RSI {rsi_v:.1f} {'bullish' if is_long else 'bearish'} (>50 / <50)"
+            elif reversal_aligned:
+                pts = w["rsi"]
+                expl = (
+                    f"RSI reversal improving from extreme ({rsi_previous:.1f} → {rsi_v:.1f})"
+                )
             else:
                 expl = f"RSI {rsi_v:.1f} against direction"
         comps.append(ScoreComponent("RSI", pts, w["rsi"], rsi_v, direction, expl, pts > 0))
@@ -285,13 +296,15 @@ class ScoringEngine:
         components.append(ScoreComponent("ORB Candle", body_points, 1.25, body,
             direction, f"Body ratio {body:.2f}", body >= 0.35))
 
-        location = float(indicators.get("close_location") or 0.5)
+        raw_location = indicators.get("close_location", 0.5)
+        location = float(0.5 if raw_location is None else raw_location)
         aligned_location = location if is_long else 1.0 - location
         location_points = 1.25 if aligned_location >= 0.80 else (1.0 if aligned_location >= 0.65 else 0.5)
         components.append(ScoreComponent("ORB Close Location", location_points, 1.25,
             aligned_location, direction, f"Directional close location {aligned_location:.2f}", True))
 
-        extension = float(indicators.get("orb_breakout_extension_atr") or 99.0)
+        raw_extension = indicators.get("orb_breakout_extension_atr")
+        extension = float(99.0 if raw_extension is None else raw_extension)
         extension_points = 2.0 if extension <= 0.35 else (1.6 if extension <= 0.55 else 1.1)
         components.append(ScoreComponent("ORB Entry Distance", extension_points, 2.0,
             extension, direction, f"Breakout extension {extension:.2f} ATR", extension <= 0.80))
