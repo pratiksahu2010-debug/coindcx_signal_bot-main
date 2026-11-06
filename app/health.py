@@ -28,16 +28,34 @@ async def health(request: Request):
     state = getattr(request.app.state, "bot_state", None)
     if state is not None:
         database = state.get("database")
-        enabled = (
+        database_paused = (
             (settings.enable_normal_engine and state.get("normal_engine") == "paused_database_unavailable")
             or (settings.enable_momentum_engine and state.get("momentum_engine") == "paused_database_unavailable")
         )
-        if database == "unavailable" or enabled:
+        normal_symbols_missing = (
+            settings.enable_normal_engine and int(state.get("valid_symbols_normal") or 0) <= 0
+        )
+        momentum_symbols_missing = (
+            settings.enable_momentum_engine and int(state.get("valid_symbols_momentum") or 0) <= 0
+        )
+        if database == "unavailable" or database_paused or normal_symbols_missing or momentum_symbols_missing:
+            reasons = []
+            if database == "unavailable" or database_paused:
+                reasons.append("database_unavailable")
+            if normal_symbols_missing:
+                reasons.append("normal_universe_empty")
+            if momentum_symbols_missing:
+                reasons.append("momentum_universe_empty")
             return JSONResponse(
                 status_code=503,
-                content={"ok": False, "status": "degraded", "database": database,
-                         "normal_engine": state.get("normal_engine"),
-                         "momentum_engine": state.get("momentum_engine")},
+                content={
+                    "ok": False, "status": "degraded", "database": database,
+                    "normal_engine": state.get("normal_engine"),
+                    "momentum_engine": state.get("momentum_engine"),
+                    "valid_symbols_normal": state.get("valid_symbols_normal", 0),
+                    "valid_symbols_momentum": state.get("valid_symbols_momentum", 0),
+                    "reasons": reasons,
+                },
             )
     return {"ok": True, "status": "healthy"}
 
