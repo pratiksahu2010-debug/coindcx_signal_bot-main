@@ -41,7 +41,7 @@ def _score_disposition(score: float, signal_threshold: float) -> str:
 
 
 def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min: float) -> Dict[str, bool]:
-    """The six explicit Normal Engine approval conditions; no candle-shape gate."""
+    """Directional trend, momentum, volume context and completed-candle confirmation."""
     is_long = direction == "LONG"
     ema9, ema21 = indicators.get("ema9"), indicators.get("ema21")
     price, vwap_value = indicators.get("close"), indicators.get("vwap")
@@ -62,6 +62,7 @@ def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min:
             rsi_value is not None
             and ((rsi_value > 50.0) if is_long else (rsi_value < 50.0))
         ),
+        "directional_candle": bool(indicators.get("directional_candle")),
     }
 
 
@@ -116,6 +117,37 @@ def _macd_hist_history(closes: Any, points: int = 4) -> List[float]:
         if np.isfinite(histogram):
             history.append(histogram)
     return history
+
+
+def _confirmed_swing_levels(
+    high: Any, low: Any, lookback: int = 30, left: int = 2, right: int = 2
+) -> tuple[Optional[float], Optional[float]]:
+    """Return latest confirmed pivot high/low using completed bars only.
+
+    A pivot is accepted only after the configured number of later completed
+    candles exist. If none is present, use the previous seven completed candles.
+    """
+    highs = np.asarray(high, dtype=float).reshape(-1)
+    lows = np.asarray(low, dtype=float).reshape(-1)
+    if highs.size != lows.size or highs.size < left + right + 2:
+        return None, None
+
+    start = max(0, highs.size - max(lookback, left + right + 2))
+    end = highs.size - right
+    pivot_high = pivot_low = None
+    for idx in range(start + left, end):
+        h_window = highs[idx - left:idx + right + 1]
+        l_window = lows[idx - left:idx + right + 1]
+        if highs[idx] >= np.max(h_window) and np.count_nonzero(highs[idx] == h_window) == 1:
+            pivot_high = float(highs[idx])
+        if lows[idx] <= np.min(l_window) and np.count_nonzero(lows[idx] == l_window) == 1:
+            pivot_low = float(lows[idx])
+
+    if pivot_low is None and highs.size >= 8:
+        pivot_low = float(np.min(lows[-8:-1]))
+    if pivot_high is None and highs.size >= 8:
+        pivot_high = float(np.max(highs[-8:-1]))
+    return pivot_high, pivot_low
 
 
 class SignalEngine:
@@ -691,11 +723,17 @@ class SignalEngine:
             (direction == "SHORT" and close_location <= 0.35 and signed_body < 0))
 
         if engine == "normal":
-            # Exactly five mandatory Normal Engine conditions. MACD and strategy labels,
-            # candle shape, DI, ADX slope, EMA50 and extra 15m filters are not gates.
+            # A Normal alert must have a real strategy predicate and a directional
+            # completed candle; never manufacture a strategy label for a generic trend.
             strategy = detect_strategy(indicators, direction)
             if strategy == "UNCLASSIFIED":
-                strategy = "EMA_VWAP_TREND"
+                self.watchlists["normal"].remove_pair(pair, "normal")
+                self._log_candle_evaluation(
+                    pair, engine, direction, candle_ts, candle_close_ms,
+                    confirm_candle_time_ms, indicators, "REJECT",
+                    failed=["unclassified_strategy"], strategy=strategy,
+                )
+                return
             gates = _normal_threshold_gates(indicators, direction, settings.normal_adx_min)
             failed = [name for name, passed in gates.items() if not passed]
             if failed:
@@ -901,11 +939,17 @@ class SignalEngine:
             )
             strategy = momentum_state
 
-        # A Normal candidate has already passed all six mandatory gates.
-        # Do not label it WATCHLIST/NONE merely because optional score components
-        # (RVOL, ATR, candle quality, structure) contribute fewer points.
-        if engine == "normal" and result.grade in ("NONE", "WATCHLIST"):
-            result.grade = "SIGNAL"
+        # Enforce the configured quality floor for both engines. The Normal
+        # engine's hard gates are necessary but not sufficient without score quality.
+        if engine == "normal" and result.total < max(7.0, float(settings.signal_threshold)):
+            self._log_candle_evaluation(
+                pair, engine, direction, candle_ts, candle_close_ms,
+                confirm_candle_time_ms, indicators, "REJECT",
+                failed=[f"score_below_min_{max(7.0, float(settings.signal_threshold)):.2f}"],
+                strategy=strategy, score=result.total, score_parts=score_parts,
+            )
+            self._last_processed.setdefault(engine, {})[pair] = candle_ts
+            return
 
         score_parts = ",".join(
             f"{c.name}:{c.points:g}/{c.max_points:g}" for c in result.components
@@ -928,15 +972,17 @@ class SignalEngine:
             )
             return
 
-        swing_low = float(np.min(low[-8:-1])) if len(low) >= 8 else None
-        swing_high = float(np.max(high[-8:-1])) if len(high) >= 8 else None
+        swing_high, swing_low = _confirmed_swing_levels(high, low, lookback=30, left=2, right=2)
         if engine == "momentum" and strategy in ("ORB_BREAKOUT", "ORB_RETEST"):
             # ORB invalidation belongs beyond the opening-range opposite edge,
             # not an arbitrary last-seven-candle micro swing.
             swing_low = indicators.get("orb_range_low")
             swing_high = indicators.get("orb_range_high")
-        risk = calculate_risk(close[-1], atr_v or 0, direction,
-                              swing_low=swing_low, swing_high=swing_high) if atr_v else None
+        risk = calculate_risk(
+            close[-1], atr_v or 0, direction,
+            swing_low=swing_low, swing_high=swing_high,
+            cost_bps=settings.futures_round_trip_cost_bps,
+        ) if atr_v else None
         strategy = strategy if engine == "normal" else momentum_state
         if not risk or min(risk.rr1, risk.rr2, risk.rr3) < 1.0:
             self._log_candle_evaluation(
