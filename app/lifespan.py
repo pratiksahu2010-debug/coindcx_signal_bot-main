@@ -123,7 +123,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "eligible_symbols": len(symbol_mgr.valid_pairs),
         "skipped_symbols": len(symbol_mgr.skipped_reasons),
         "liquidity_filtered_symbols": sum(
-            item.get("status") in ("LOW_LIQUIDITY", "LIQUIDITY_UNKNOWN")
+            item.get("status") in ("LOW_LIQUIDITY", "LIQUIDITY_UNKNOWN", "PARTIAL_LIQUIDITY")
             for item in symbol_mgr.whitelist_diagnostics.values()
         ),
         "normal_min_24h_turnover_usdt": settings.normal_min_24h_turnover_usdt,
