@@ -521,8 +521,8 @@ async def retry_signal_delivery(delivery_key: str, error: str, attempts: int, ma
 async def expire_stale_signal_deliveries(limit: int = 100) -> int:
     """Expire pending items whose original signal validity window has passed."""
     import json
-    from datetime import datetime, timezone
-    from sqlalchemy import select
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import select, delete
     from database import db as database_db
     from database.models import SignalDeliveryRecord
     factory = database_db.SessionLocal
@@ -531,6 +531,11 @@ async def expire_stale_signal_deliveries(limit: int = 100) -> int:
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     async with factory() as session:
         try:
+            # Bound outbox growth by pruning terminal rows after 30 days.
+            await session.execute(delete(SignalDeliveryRecord).where(
+                SignalDeliveryRecord.status.in_(("delivered", "failed", "expired")),
+                SignalDeliveryRecord.updated_at < now - timedelta(days=30),
+            ))
             result = await session.execute(select(SignalDeliveryRecord).where(
                 SignalDeliveryRecord.status.in_(("pending", "retry"))
             ).limit(max(1, min(int(limit), 500))))
