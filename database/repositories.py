@@ -358,10 +358,16 @@ async def enqueue_signal_deliveries(signal: dict, recipient_ids: list[int]) -> i
     if factory is None or engine is None or not recipient_ids:
         return 0
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    remaining = max(
-        1,
-        int(settings.max_signal_age_seconds - float(signal.get("signal_age_seconds", 0))),
-    )
+    # A confirmed retest is a fresh live-price event even though its
+    # originating candle may be several minutes old. Give it a fresh delivery
+    # window; ordinary candle-close signals consume their remaining age budget.
+    if signal.get("entry_type") == "RETEST_CONFIRMED":
+        remaining = int(settings.max_signal_age_seconds)
+    else:
+        remaining = max(
+            1,
+            int(settings.max_signal_age_seconds - float(signal.get("signal_age_seconds", 0))),
+        )
     next_attempt = now
     key_base = ":".join(str(signal.get(k, "")) for k in (
         "pair", "engine", "direction", "candle_time_ms"
