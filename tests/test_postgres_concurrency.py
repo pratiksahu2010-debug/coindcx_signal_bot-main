@@ -7,7 +7,7 @@ import asyncio
 import json
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import delete, func, select
@@ -123,7 +123,7 @@ def test_concurrent_pending_retest_upserts_preserve_one_row_per_key():
             async def write(index):
                 key = keys[index % len(keys)]
                 pending = {
-                    "expires_at": (datetime.utcnow() + timedelta(minutes=5)).timestamp(),
+                    "expires_at": (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=5)).timestamp(),
                     "signal": {
                         "pair": f"B-TEST{index}_USDT",
                         "engine": "normal",
