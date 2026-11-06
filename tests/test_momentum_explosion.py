@@ -63,7 +63,6 @@ def test_rejects_insufficient_relative_volume(rvol):
     assert not evaluate(setup(rvol=rvol))
 
 
-@pytest.mark.parametrize("body_ratio", [0.0, 0.30, 0.44])
 def test_moderate_volume_can_pass_only_with_exceptional_direct_breakout():
     assert evaluate(setup(
         rvol=1.40,
@@ -78,6 +77,7 @@ def test_moderate_volume_without_exceptional_range_is_rejected():
     assert not evaluate(setup(rvol=1.40, structure_break=True))
 
 
+@pytest.mark.parametrize("body_ratio", [0.0, 0.30, 0.44])
 def test_rejects_weak_candle_body(body_ratio):
     assert not evaluate(setup(body_ratio=body_ratio))
 
