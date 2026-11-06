@@ -1,24 +1,27 @@
-"""Relative Strength Index (Wilder)."""
+"""Relative Strength Index using Wilder smoothing."""
 import numpy as np
 from typing import Optional
 
 
 def rsi(closes: np.ndarray, period: int = 14) -> Optional[float]:
-    if len(closes) < period + 1:
+    try:
+        values = np.asarray(closes, dtype=np.float64)
+        p = int(period)
+    except (TypeError, ValueError, OverflowError):
         return None
-    deltas = np.diff(closes)
+    if (
+        values.ndim != 1 or p != period or p < 1 or len(values) < p + 1
+        or not np.all(np.isfinite(values)) or np.any(values <= 0)
+    ):
+        return None
+    deltas = np.diff(values)
     gains = np.where(deltas > 0, deltas, 0.0)
     losses = np.where(deltas < 0, -deltas, 0.0)
-
-    avg_gain = np.mean(gains[:period])
-    avg_loss = np.mean(losses[:period])
-
-    for i in range(period, len(gains)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-
-    # A perfectly flat series has no gains or losses; keep RSI neutral
-    # rather than incorrectly classifying it as maximally overbought.
+    avg_gain = float(np.mean(gains[:p]))
+    avg_loss = float(np.mean(losses[:p]))
+    for i in range(p, len(gains)):
+        avg_gain = (avg_gain * (p - 1) + gains[i]) / p
+        avg_loss = (avg_loss * (p - 1) + losses[i]) / p
     if avg_gain == 0 and avg_loss == 0:
         return 50.0
     if avg_loss == 0:
