@@ -34,6 +34,8 @@ def validate_runtime_config() -> None:
         raise ValueError("MAX_CANDLES_BUFFER must be at least 50")
     if settings.normal_symbol_limit < 1 or settings.momentum_symbol_limit < 1:
         raise ValueError("Normal and Momentum symbol limits must be positive")
+    if settings.normal_min_24h_turnover_usdt <= 0 or settings.momentum_min_24h_turnover_usdt <= 0:
+        raise ValueError("Minimum 24h Futures turnover thresholds must be positive")
     if not 0.0 <= settings.signal_threshold <= 10.0:
         raise ValueError("SIGNAL_THRESHOLD must be between 0 and 10")
     if not 0.0 < settings.normal_rvol_min:
