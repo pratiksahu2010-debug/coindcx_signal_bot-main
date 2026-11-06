@@ -769,11 +769,12 @@ def test_normal_engine_has_no_macd_gate():
     base = {
         "ema9": 102.0, "ema21": 100.0, "close": 103.0, "vwap": 101.0,
         "adx": 30.0, "confirm_15m": True, "rsi": 58.0,
+        "directional_candle": True,
     }
     # Missing or opposing MACD data must not affect Normal Engine approval.
     without_macd = _normal_threshold_gates(base, "LONG", 25.0)
     opposing_macd = _normal_threshold_gates({**base, "macd_hist": -999.0}, "LONG", 25.0)
-    assert len(without_macd) == 5
+    assert len(without_macd) == 6
     assert all(without_macd.values())
     assert opposing_macd == without_macd
 
@@ -794,3 +795,23 @@ def test_normal_scoring_has_no_macd_component_and_keeps_ten_point_scale():
     assert len(result.components) == 9
     assert sum(component.max_points for component in result.components) == pytest.approx(10.0)
     assert result.total == pytest.approx(10.0)
+
+
+def test_confirmed_swing_levels_ignore_unconfirmed_last_two_bars():
+    from core.engine import _confirmed_swing_levels
+
+    highs = [10, 11, 12, 11, 10, 11, 13, 12, 11, 12]
+    lows =  [8, 7,  6,  7,  8,  7,  5,  6,  7,  6]
+    swing_high, swing_low = _confirmed_swing_levels(highs, lows, lookback=20, left=2, right=2)
+    assert swing_high == 13.0
+    assert swing_low == 5.0
+
+
+def test_risk_calculator_uses_configured_round_trip_cost():
+    from core.risk_calculator import calculate_risk
+
+    no_cost = calculate_risk(100, 2, "LONG", swing_low=98.5, cost_bps=0)
+    high_cost = calculate_risk(100, 2, "LONG", swing_low=98.5, cost_bps=100)
+    assert no_cost and high_cost
+    assert high_cost.rr1 < no_cost.rr1
+    assert calculate_risk(100, 2, "LONG", cost_bps=-1) is None
