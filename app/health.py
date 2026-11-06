@@ -83,6 +83,7 @@ async def status(request: Request) -> Dict[str, Any]:
     telegram = getattr(request.app.state, "telegram", None)
     telegram_polling = bool(getattr(telegram, "polling_active", False))
     telegram_status = "polling" if telegram_polling else ("send_only" if getattr(telegram, "bot", None) else "disabled")
+    delivery_worker = getattr(request.app.state, "telegram_delivery_worker", None)
     return {
         "ok": True,
         "service": "coindcx-signal-bot",
@@ -107,6 +108,13 @@ async def status(request: Request) -> Dict[str, Any]:
         "telegram_polling": telegram_polling,
         "eligible_symbols": app_state.get("eligible_symbols", 0),
         "skipped_symbols": app_state.get("skipped_symbols", 0),
+        "liquidity_filtered_symbols": app_state.get("liquidity_filtered_symbols", 0),
+        "normal_min_24h_turnover_usdt": app_state.get("normal_min_24h_turnover_usdt"),
+        "momentum_min_24h_turnover_usdt": app_state.get("momentum_min_24h_turnover_usdt"),
+        "telegram_outbox_worker": "running" if getattr(delivery_worker, "running", False) else "stopped",
+        "telegram_outbox_delivered": getattr(delivery_worker, "delivered", 0),
+        "telegram_outbox_failed": getattr(delivery_worker, "failed", 0),
+        "telegram_outbox_expired": getattr(delivery_worker, "expired", 0),
     }
 
 
@@ -114,6 +122,7 @@ async def status(request: Request) -> Dict[str, Any]:
 async def metrics(request: Request) -> Dict[str, Any]:
     app_state = getattr(request.app.state, "bot_state", {})
     mem = check_memory()
+    delivery_worker = getattr(request.app.state, "telegram_delivery_worker", None)
     return {
         "uptime_seconds": app_state.get("uptime_seconds", 0),
         "scan_count": app_state.get("scan_count", 0),
@@ -132,6 +141,10 @@ async def metrics(request: Request) -> Dict[str, Any]:
         "pending_retest_checks": getattr(getattr(request.app.state, "engine", None), "pending_retest_checks", 0),
         "pending_retest_failures": getattr(getattr(request.app.state, "engine", None), "pending_retest_failures", 0),
         "telegram_delivery_failures": getattr(getattr(request.app.state, "engine", None), "telegram_delivery_failures", 0),
+        "telegram_outbox_worker_running": bool(getattr(delivery_worker, "running", False)),
+        "telegram_outbox_delivered": getattr(delivery_worker, "delivered", 0),
+        "telegram_outbox_failed": getattr(delivery_worker, "failed", 0),
+        "telegram_outbox_expired": getattr(delivery_worker, "expired", 0),
         "memory_mb": mem["memory_mb"],
         "timestamp": utc_iso(),
     }
