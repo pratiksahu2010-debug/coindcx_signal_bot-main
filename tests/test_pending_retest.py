@@ -43,6 +43,11 @@ def test_pending_retest_promotes_once_only_inside_original_zone(monkeypatch):
     async def run():
         engine = SignalEngine(FakeRest([100.0, 100.1]), object(), object())
         engine.telegram = FakeTelegram()
+        from datetime import datetime, timezone
+        monkeypatch.setattr(
+            "core.engine.utc_now",
+            lambda: datetime.fromtimestamp(1_800_000_600, tz=timezone.utc),
+        )
         key = _pending(engine, expires_at=9_999_999_999_999)
         claims = []
 
@@ -60,6 +65,8 @@ def test_pending_retest_promotes_once_only_inside_original_zone(monkeypatch):
         assert key not in engine.pending_retests
         assert len(engine.telegram.sent) == 1
         assert engine.telegram.sent[0]["entry_type"] == "RETEST_CONFIRMED"
+        # The original candle closed five minutes before this retest alert.
+        assert engine.telegram.sent[0]["signal_age_seconds"] == 300.0
         assert claims == [1_800_000_000_000]
         assert engine.cooldowns["normal"].is_cooling(
             "B-BTC_USDT", "normal", "LONG"
