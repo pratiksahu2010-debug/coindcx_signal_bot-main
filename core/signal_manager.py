@@ -11,6 +11,7 @@ class SignalManager:
         self.max_active = max_active
         self.ttl = timedelta(hours=ttl_hours)
         self._signals: Dict[str, dict] = {}
+        self._evicted: List[dict] = []
 
     def _key(self, pair: str, engine: str, direction: str) -> str:
         return f"{pair}:{engine}:{direction}"
@@ -94,8 +95,19 @@ class SignalManager:
                 if exp <= now: sig["status"]="expired"
             except Exception: sig["status"]="expired"
 
+    def drain_evicted(self) -> List[dict]:
+        """Return and clear active signals evicted by the in-memory capacity limit."""
+        items = self._evicted
+        self._evicted = []
+        return items
+
     def _evict(self):
-        active=[k for k,s in self._signals.items() if s.get("status")=="active"]
-        if len(active)>self.max_active:
-            for key in sorted(active,key=lambda k:self._signals[k].get("score",0))[:len(active)-self.max_active]:
-                self._signals[key]["status"]="evicted"
+        active = [k for k, signal in self._signals.items() if signal.get("status") == "active"]
+        if len(active) > self.max_active:
+            victims = sorted(
+                active, key=lambda key: self._signals[key].get("score", 0)
+            )[:len(active) - self.max_active]
+            for key in victims:
+                signal = self._signals[key]
+                signal["status"] = "evicted"
+                self._evicted.append(dict(signal))
