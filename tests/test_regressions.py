@@ -91,8 +91,8 @@ def test_dynamic_symbol_universe_uses_ticker_liquidity_and_active_status(monkeyp
     import asyncio
     from exchange.symbol_manager import SymbolManager
 
-    # Both engines use their configured static allowlists; live volume does not
-    # change membership or order. LOW is intentionally present only in this fixture.
+    # Static order is retained, but candidates below the engine turnover floor
+    # are excluded. LOW is intentionally present only in this fixture.
     monkeypatch.setattr(
         SymbolManager, "_load_yaml",
         lambda self, path: (
@@ -101,6 +101,9 @@ def test_dynamic_symbol_universe_uses_ticker_liquidity_and_active_status(monkeyp
             else ["B-BTC_USDT", "B-ETH_USDT"]
         ),
     )
+
+    monkeypatch.setattr("config.settings.normal_min_24h_turnover_usdt", 100.0)
+    monkeypatch.setattr("config.settings.momentum_min_24h_turnover_usdt", 100.0)
 
     class FakeRest:
         async def get_market_details(self):
@@ -122,16 +125,19 @@ def test_dynamic_symbol_universe_uses_ticker_liquidity_and_active_status(monkeyp
         manager = SymbolManager(FakeRest())
         await manager.load_and_validate()
         assert manager.normal_symbols[:2] == ["B-BTC_USDT", "B-ETH_USDT"]
-        assert manager.momentum_symbols == ["B-BTC_USDT", "B-ETH_USDT", "B-LOW_USDT"]
+        assert manager.momentum_symbols == ["B-BTC_USDT", "B-ETH_USDT"]
         assert "B-OFF_USDT" not in manager.valid_pairs
         assert "B-LOW_USDT" in manager.valid_pairs
+        assert manager.whitelist_diagnostics["LOWUSDT"]["status"] == "LOW_LIQUIDITY"
 
     asyncio.run(run())
 
 
-def test_dynamic_symbol_universe_excludes_stablecoin_pairs():
+def test_dynamic_symbol_universe_excludes_stablecoin_pairs(monkeypatch):
     import asyncio
     from exchange.symbol_manager import SymbolManager
+    monkeypatch.setattr("config.settings.normal_min_24h_turnover_usdt", 1.0)
+    monkeypatch.setattr("config.settings.momentum_min_24h_turnover_usdt", 1.0)
 
     class FakeRest:
         async def get_market_details(self):
