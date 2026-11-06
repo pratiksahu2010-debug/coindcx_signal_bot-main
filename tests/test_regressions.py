@@ -91,13 +91,14 @@ def test_dynamic_symbol_universe_uses_ticker_liquidity_and_active_status(monkeyp
     import asyncio
     from exchange.symbol_manager import SymbolManager
 
-    # Normal scans are liquidity-ranked; Momentum/ORB use only their configured
-    # static whitelist, even when other active Futures markets are discovered.
+    # Both engines use their configured static allowlists; live volume does not
+    # change membership or order. LOW is intentionally present only in this fixture.
     monkeypatch.setattr(
         SymbolManager, "_load_yaml",
         lambda self, path: (
             ["B-BTC_USDT", "B-ETH_USDT", "B-LOW_USDT"]
-            if path.endswith("momentum_symbols.yaml") else []
+            if path.endswith("momentum_symbols.yaml")
+            else ["B-BTC_USDT", "B-ETH_USDT"]
         ),
     )
 
@@ -280,13 +281,11 @@ def test_stale_market_quarantine_filters_both_engine_universes_and_restores(monk
     from exchange.symbol_manager import SymbolManager
     from config import settings
 
-    # Include BAD explicitly in the static Momentum/ORB list for this fixture.
+    # Include BAD explicitly in both static lists; SOL is the next eligible
+    # configured symbol and backfills a quarantined slot within the static list.
     monkeypatch.setattr(
         SymbolManager, "_load_yaml",
-        lambda self, path: (
-            ["B-BAD_USDT", "B-BTC_USDT", "B-ETH_USDT"]
-            if path.endswith("momentum_symbols.yaml") else []
-        ),
+        lambda self, path: ["B-BAD_USDT", "B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT"],
     )
 
     class FakeRest:
@@ -331,8 +330,8 @@ def test_stale_market_quarantine_filters_both_engine_universes_and_restores(monk
             assert "B-BAD_USDT" not in manager.normal_symbols
             assert "B-BAD_USDT" not in manager.momentum_symbols
             assert len(manager.normal_symbols) == 2
-            # Static whitelist does not backfill SOL when BAD is quarantined.
-            assert manager.momentum_symbols == ["B-BTC_USDT", "B-ETH_USDT"]
+            # Backfill comes only from the remaining configured static allowlist.
+            assert manager.momentum_symbols == ["B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT"]
             assert "B-BAD_USDT" in manager.skipped_reasons
 
             # Simulate the 15-minute retry deadline and recovery of both feeds.
@@ -603,13 +602,10 @@ def test_liquidity_universe_reorders_when_24h_volume_changes(monkeypatch):
     import asyncio
     from exchange.symbol_manager import SymbolManager
 
-    # Normal engine follows liquidity; Momentum/ORB retain static whitelist order.
+    # Both engines retain the configured static order even when live volume changes.
     monkeypatch.setattr(
         SymbolManager, "_load_yaml",
-        lambda self, path: (
-            ["B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT"]
-            if path.endswith("momentum_symbols.yaml") else []
-        ),
+        lambda self, path: ["B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT"],
     )
 
     class FakeRest:
@@ -632,11 +628,11 @@ def test_liquidity_universe_reorders_when_24h_volume_changes(monkeypatch):
         rest = FakeRest()
         manager = SymbolManager(rest)
         await manager.load_and_validate()
-        assert manager.normal_symbols[0] == "B-BTC_USDT"
+        assert manager.normal_symbols == ["B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT"]
         rest.volumes = {"BTC": 50, "ETH": 500, "SOL": 250}
         manager._last_liquidity_refresh = 0
         await manager.refresh_universes()
-        assert manager.normal_symbols[0] == "B-ETH_USDT"
+        assert manager.normal_symbols == ["B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT"]
         assert manager.momentum_symbols == ["B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT"]
 
     asyncio.run(run())
