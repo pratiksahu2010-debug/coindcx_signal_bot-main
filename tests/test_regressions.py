@@ -811,3 +811,14 @@ def test_risk_calculator_uses_configured_round_trip_cost():
     assert no_cost and high_cost
     assert high_cost.rr1 < no_cost.rr1
     assert calculate_risk(100, 2, "LONG", cost_bps=-1) is None
+
+
+def test_candle_buffer_rejects_nonfinite_and_inconsistent_ohlc():
+    buffer = CandleBuffer(10)
+    valid = {"time": 1000, "open": 10, "high": 12, "low": 9, "close": 11, "volume": 5}
+    assert buffer.update(valid)
+    assert not buffer.update({**valid, "time": 2000, "close": float("nan")})
+    assert not buffer.update({**valid, "time": 3000, "high": 8})
+    assert not buffer.update({**valid, "time": 4000, "volume": -1})
+    assert len(buffer) == 1
+    assert buffer.last_close() == 11.0
