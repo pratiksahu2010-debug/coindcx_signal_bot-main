@@ -280,6 +280,8 @@ class SignalEngine:
                     logger.warning(
                         f"Could not restore cooldown timestamp for {signal.get('pair')}"
                     )
+        for engine_name in self.signals:
+            await self._persist_evicted_signals(engine_name)
         logger.info(f"ACTIVE_SIGNALS_RESTORED count={restored}")
         return restored
 
@@ -1157,7 +1159,9 @@ class SignalEngine:
             signal["signal_age_seconds"] = round(final_age, 1)
             signal["timestamp"] = utc_iso(utc_now())
             self._last_processed.setdefault(engine, {})[pair] = candle_ts
-            if self.signals[engine].add(signal):
+            signal_added = self.signals[engine].add(signal)
+            await self._persist_evicted_signals(engine)
+            if signal_added:
                 # Durable claim blocks duplicate alerts after a Render restart or
                 # a second worker sharing the same database.
                 try:
@@ -1282,6 +1286,28 @@ class SignalEngine:
             self.watchlists[engine].add(signal)
             logger.info(f"WATCHLIST {direction} {pair} score={result.total}")
 
+    async def _persist_evicted_signals(self, engine: str) -> None:
+        """Mirror in-memory capacity evictions to durable signal lifecycle rows."""
+        evicted = self.signals[engine].drain_evicted()
+        if not evicted:
+            return
+        try:
+            from database.repositories import update_signal_record
+            for signal in evicted:
+                updated = await update_signal_record(signal, "evicted")
+                if updated:
+                    logger.info(
+                        f"ACTIVE_SIGNAL_EVICTED_PERSISTED pair={signal.get('pair')} "
+                        f"engine={engine} direction={signal.get('direction')}"
+                    )
+                else:
+                    logger.warning(
+                        f"ACTIVE_SIGNAL_EVICTION_NOT_PERSISTED pair={signal.get('pair')} "
+                        f"engine={engine} direction={signal.get('direction')}"
+                    )
+        except Exception as exc:
+            logger.error(f"ACTIVE_SIGNAL_EVICTION_PERSIST_ERROR engine={engine}: {exc}")
+
     async def _persist_pending_retest_candidate(self, key: str, pending: dict) -> bool:
         """Persist before retaining a retest candidate in memory.
 
@@ -1383,7 +1409,9 @@ class SignalEngine:
                 except Exception as exc:
                     logger.error(f"RETEST_TELEGRAM_ERROR {key}: {exc}")
             if delivered:
-                if self.signals[engine].add(signal):
+                signal_added = self.signals[engine].add(signal)
+                await self._persist_evicted_signals(engine)
+                if signal_added:
                     self.cooldowns[engine].set(pair, engine, direction)
                     from database.repositories import save_signal, record_signal_outcome
                     active = self.signals[engine].get(pair, engine, direction) or signal
