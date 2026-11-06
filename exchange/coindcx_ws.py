@@ -4,6 +4,7 @@ REST remains authoritative for completed-candle decisions. This client only
 feeds live, forming candles into CandleBuilder and safely degrades on disconnect.
 """
 import asyncio
+import re
 from typing import Any, Dict, Iterable, Optional
 
 import socketio
@@ -136,8 +137,12 @@ class CoinDCXFuturesStream:
             if not isinstance(row, dict):
                 continue
             try:
-                pair = str(row.get("pair") or row.get("channel", "").split("_", 1)[0])
-                pair = pair.strip()
+                raw_pair = row.get("pair") or row.get("market") or row.get("symbol")
+                if not raw_pair:
+                    channel = str(row.get("channel", ""))
+                    match = re.search(r"((?:B|I|HB|KC)-[A-Z0-9]+_[A-Z0-9]+)", channel.upper())
+                    raw_pair = match.group(1) if match else ""
+                pair = str(raw_pair or "").strip().upper()
                 if not pair or not pair.startswith(("B-", "I-", "HB-", "KC-")):
                     continue
                 raw_time = row.get("open_time", row.get("t", row.get("time")))
@@ -164,7 +169,9 @@ class CoinDCXFuturesStream:
                             self.on_candle_callback(pair, interval, candle)
                         except Exception as exc:
                             logger.debug(f"WS_CANDLE_CALLBACK_SKIPPED {pair}: {exc}")
-                    self._last_event_ms = int(row.get("Ets") or row.get("close_time") or ts)
+                    raw_event_time = row.get("Ets") or row.get("close_time") or ts
+                    event_time = int(float(raw_event_time))
+                    self._last_event_ms = event_time * 1000 if event_time < 10**12 else event_time
             except (TypeError, ValueError, OverflowError):
                 continue
 
