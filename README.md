@@ -3,7 +3,7 @@
 **Signal-only** crypto bot. Generates LONG/SHORT signals on **5-minute** timeframe. Never places orders.
 
 ## Features
-- Normal Engine (trend / pullback / breakout) + Momentum Explosion Engine
+- Normal Engine (trend / pullback / breakout / reversal) + Momentum Engine (explosion / squeeze / continuation / qualified volume spike)
 - Dual-session crypto ORB: London 08:00 Europe/London and New York 09:30 America/New_York with 15-minute opening ranges and DST-aware clocks
 - 10-point scoring, ATR risk (SL / TP1 / TP2 / TP3)
 - Telegram push alerts to configured admin IDs (push-only; command polling is disabled)
@@ -25,9 +25,9 @@
    - `SIGNAL_THRESHOLD=7.0`
    - `DATABASE_URL` = the Internal Database URL from a managed Render PostgreSQL instance (keep it secret)
 7. Keep exactly **one Render service instance** and the configured **one Uvicorn worker**. Do not deploy a second copy with the same Telegram bot token.
-9. Deploy
-10. Verify `/health` and `/status`, then wait for completed-candle alerts to be pushed to the configured admin IDs. Telegram command polling is not enabled.
-11. Cron-job.org → GET `https://YOUR-SERVICE.onrender.com/ping` every 10–14 min
+8. Deploy
+9. Verify `/health` and `/status`, then wait for completed-candle alerts to be pushed to the configured admin IDs. Telegram command polling is not enabled.
+10. Cron-job.org → GET `https://YOUR-SERVICE.onrender.com/ping` every 10–14 min
 
 ## Keep-alive and health checks
 
@@ -63,7 +63,7 @@ MIT (bot code). CoinDCX API subject to their terms.
 - REST candle ingestion normalizes timestamps to UTC epoch milliseconds, removes malformed/duplicate rows, and passes completed candles only.
 - REST is authoritative for completed-candle decisions and uses a short shared cache. WebSocket is optional in local configuration; the Render blueprint explicitly enables it for live Futures LTP and forming-candle watchlist telemetry.
 - Normal alerts require directional 15m EMA9/21 context, 5m EMA/VWAP/ADX/RSI alignment, a quality candle close, anti-chase distance, and a recognized strategy predicate. Directional +DI/-DI alignment improves the ADX score but is not a hard gate, preserving earlier entries before DI crosses.
-- Momentum alerts require a real squeeze/explosion/continuation state with directional confirmation; generic momentum labels cannot trigger alerts.
+- Momentum alerts require a qualified explosion, squeeze release, continuation, directional volume spike, or ORB state with directional confirmation; generic setup labels cannot trigger alerts.
 - Risk levels use nearby swing structure with ATR bounds and targets expressed as risk multiples.
 - Active signals are monitored against subsequent completed candle highs/lows. If stop and target are both touched in one candle, stop-loss is conservatively assumed first.
 - Signal-only operation is retained; no order-placement endpoint or execution path is added.
