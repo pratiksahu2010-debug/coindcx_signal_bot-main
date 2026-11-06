@@ -40,13 +40,33 @@ def _score_disposition(score: float, signal_threshold: float) -> str:
     return "REJECT"
 
 
-def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min: float) -> Dict[str, bool]:
-    """Directional trend, momentum, volume context and completed-candle confirmation."""
+def _normal_threshold_gates(
+    indicators: Dict[str, Any], direction: str, adx_min: float,
+    strategy: Optional[str] = None,
+) -> Dict[str, bool]:
+    """Directional trend, momentum, volume context and completed-candle confirmation.
+
+    Reversal setups use improving RSI from an extreme zone instead of the
+    continuation-only RSI >50 / <50 rule. Applying both rules made REVERSAL
+    mathematically impossible to approve.
+    """
     is_long = direction == "LONG"
     ema9, ema21 = indicators.get("ema9"), indicators.get("ema21")
     price, vwap_value = indicators.get("close"), indicators.get("vwap")
     rsi_value = indicators.get("rsi")
+    rsi_previous = indicators.get("rsi_prev")
     adx_value = indicators.get("adx")
+    if strategy == "REVERSAL":
+        rsi_ok = (
+            rsi_value is not None and rsi_previous is not None
+            and ((rsi_value < 40.0 and rsi_value >= rsi_previous) if is_long
+                 else (rsi_value > 60.0 and rsi_value <= rsi_previous))
+        )
+    else:
+        rsi_ok = (
+            rsi_value is not None
+            and ((rsi_value > 50.0) if is_long else (rsi_value < 50.0))
+        )
     return {
         "ema_alignment": (
             ema9 is not None and ema21 is not None
@@ -58,10 +78,7 @@ def _normal_threshold_gates(indicators: Dict[str, Any], direction: str, adx_min:
         ),
         "adx_min": adx_value is not None and adx_value >= adx_min,
         "context_15m": bool(indicators.get("confirm_15m")),
-        "rsi_direction": (
-            rsi_value is not None
-            and ((rsi_value > 50.0) if is_long else (rsi_value < 50.0))
-        ),
+        "rsi_direction": bool(rsi_ok),
         "directional_candle": bool(indicators.get("directional_candle")),
     }
 
@@ -765,7 +782,9 @@ class SignalEngine:
                     failed=["unclassified_strategy"], strategy=strategy,
                 )
                 return
-            gates = _normal_threshold_gates(indicators, direction, settings.normal_adx_min)
+            gates = _normal_threshold_gates(
+                indicators, direction, settings.normal_adx_min, strategy=strategy
+            )
             failed = [name for name, passed in gates.items() if not passed]
             if failed:
                 # A previously watched setup is no longer valid once one of the
@@ -1116,19 +1135,9 @@ class SignalEngine:
                     "entry": risk.entry, "zone_low": zone_low, "zone_high": zone_high,
                     "stop_loss": risk.stop_loss, "candle_ts": candle_ts,
                 }
-                self.pending_retests[pending_key] = pending_record
-                try:
-                    from database.repositories import save_pending_retest
-                    if not await save_pending_retest(pending_key, pending_record):
-                        self.pending_retests.pop(pending_key, None)
-                        self._last_processed.setdefault(engine, {})[pair] = candle_ts
-                        logger.error(
-                            f"PENDING_RETEST_PERSIST_FAILED_CLOSED {pending_key}; "
-                            "candidate discarded because restart-safe state was not committed"
-                        )
-                        return
-                except Exception as exc:
-                    logger.error(f"PENDING_RETEST_PERSIST_ERROR {pending_key}: {exc}")
+                if not await self._persist_pending_retest_candidate(pending_key, pending_record):
+                    self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                    return
                 self._last_processed.setdefault(engine, {})[pair] = candle_ts
                 logger.info(
                     f"ENTRY_RETEST_PENDING {pair} engine={engine} direction={direction} "
@@ -1278,6 +1287,29 @@ class SignalEngine:
             self._last_processed.setdefault(engine, {})[pair] = candle_ts
             self.watchlists[engine].add(signal)
             logger.info(f"WATCHLIST {direction} {pair} score={result.total}")
+
+    async def _persist_pending_retest_candidate(self, key: str, pending: dict) -> bool:
+        """Persist before retaining a retest candidate in memory.
+
+        Both a False result and an exception fail closed. Keeping an in-memory
+        candidate after a database exception would create a non-restart-safe
+        alert that can disappear silently on a Render restart.
+        """
+        try:
+            from database.repositories import save_pending_retest
+            saved = await save_pending_retest(key, pending)
+        except Exception as exc:
+            logger.error(f"PENDING_RETEST_PERSIST_ERROR {key}: {exc}")
+            saved = False
+        if not saved:
+            self.pending_retests.pop(key, None)
+            logger.error(
+                f"PENDING_RETEST_PERSIST_FAILED_CLOSED {key}; "
+                "candidate discarded because durable state was not committed"
+            )
+            return False
+        self.pending_retests[key] = pending
+        return True
 
     async def _check_pending_retest(self, pair: str, engine: str) -> None:
         """Promote a persisted setup only while fresh LTP is in its original zone."""
