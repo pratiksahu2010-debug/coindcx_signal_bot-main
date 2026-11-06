@@ -367,10 +367,16 @@ class ScoringEngine:
                                     "EMA 9/21/50 aligned" if ema_ok else "EMA not aligned", ema_ok))
 
         # MACD accel
-        macd_acc = indicators.get("macd_accel", False)
-        pts = w["macd_accel"] if macd_acc else 0.0
-        comps.append(ScoreComponent("MACD Accel", pts, w["macd_accel"], macd_acc, direction,
-                                    "Histogram accelerating" if macd_acc else "No accel", macd_acc))
+        macd_acc = bool(indicators.get("macd_accel", False))
+        macd_direction = bool(indicators.get("macd_direction_ok", False))
+        pts = w["macd_accel"] if macd_acc else (w["macd_accel"] * 0.5 if macd_direction else 0.0)
+        macd_expl = (
+            "Histogram accelerating" if macd_acc
+            else "MACD direction aligned" if macd_direction
+            else "MACD not directionally aligned"
+        )
+        comps.append(ScoreComponent("MACD Accel", pts, w["macd_accel"],
+                                    macd_acc or macd_direction, direction, macd_expl, pts > 0))
 
         # RSI accel
         rsi_acc = indicators.get("rsi_accel", False)
