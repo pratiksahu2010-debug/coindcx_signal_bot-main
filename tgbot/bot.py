@@ -211,6 +211,7 @@ class TelegramBot:
             f"{dot} <b>{safe(pair)} — {side} SIGNAL</b>",
             f"<b>ENGINE:</b> {safe(engine or 'n/a')}",
             f"<b>STRATEGY:</b> {safe(strategy)}",
+            *([f"<b>ORB SESSION:</b> {safe(ind.get('orb_session'))} | <b>LOCAL OPEN:</b> {safe(ind.get('orb_session_open_local'))}"] if ind.get("orb_session") else []),
             f"<b>SCORE:</b> {safe(score)}/10 — <b>{safe(grade)}</b>",
             "",
         ]
