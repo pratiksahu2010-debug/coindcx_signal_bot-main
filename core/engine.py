@@ -222,7 +222,7 @@ class SignalEngine:
                 return
             self.watchlists["momentum"].add({
                 "pair": pair, "display": self.symbols.display_name(pair),
-                "direction": direction, "engine": "momentum",
+                "direction": None, "engine": "momentum",
                 "strategy": "INTRABAR_PRESETUP", "score": 5.5,
                 "grade": "WATCHLIST", "price": live_close,
                 "indicators": {"live_rvol": round(rvol_live, 3),
@@ -715,6 +715,10 @@ class SignalEngine:
                 f"body={signed_body:.8g}"
             )
             return
+        # Direction is assigned above after the ORB result and momentum ROC
+        # are known. Populate it now; the initial indicators snapshot is built
+        # earlier and must not read this local before assignment.
+        indicators["direction"] = direction
         # CoinDCX OHLCV does not expose aggressor-side buy/sell volume.
         # Use completed candle body direction as an explicit participation proxy.
         indicators["directional_volume_proxy_ok"] = bool(
