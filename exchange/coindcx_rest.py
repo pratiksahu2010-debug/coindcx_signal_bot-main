@@ -442,6 +442,19 @@ class CoinDCXRest:
         counts = self._stale_market_timeframes.setdefault(pair, {})
         counts[interval] = counts.get(interval, 0) + 1
 
+    def _prune_candle_cache(self) -> None:
+        """Keep candle cache bounded even on early malformed-response returns."""
+        if len(self._candle_cache) <= 1000:
+            return
+        cutoff = time.monotonic() - 15
+        self._candle_cache = {
+            key: value for key, value in self._candle_cache.items()
+            if value[0] >= cutoff
+        }
+        if len(self._candle_cache) > 1000:
+            for old_key in list(self._candle_cache)[:len(self._candle_cache) - 1000]:
+                self._candle_cache.pop(old_key, None)
+
     async def get_candles(
         self, pair: str, interval: str = "5m", limit: int = 200,
         start_time: Optional[int] = None, end_time: Optional[int] = None,
@@ -556,6 +569,7 @@ class CoinDCXRest:
             # this, each engine can repeat the same failed REST request during
             # one scan cycle and amplify exchange load for an unhealthy market.
             self._candle_cache[cache_key] = (time.monotonic(), [])
+            self._prune_candle_cache()
             return []
         normalized = []
         for row in data:
@@ -607,12 +621,6 @@ class CoinDCXRest:
             # live-feed observations too; otherwise these symbols evade quarantine.
             self._record_candle_feed_observation(pair, interval, False)
         self._candle_cache[cache_key] = (time.monotonic(), [dict(x) for x in candles])
-        # Bound memory when many symbols/time windows are scanned.
-        if len(self._candle_cache) > 1000:
-            cutoff = time.monotonic() - 15
-            self._candle_cache = {k: v for k, v in self._candle_cache.items() if v[0] >= cutoff}
-            if len(self._candle_cache) > 1000:
-                for old_key in list(self._candle_cache)[:len(self._candle_cache) - 1000]:
-                    self._candle_cache.pop(old_key, None)
+        self._prune_candle_cache()
         return candles
 
