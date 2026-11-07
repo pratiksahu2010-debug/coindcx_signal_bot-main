@@ -687,3 +687,33 @@ def test_futures_ws_rejects_malformed_ohlcv_before_buffer_update(monkeypatch):
         },
     })
     assert builder.rows == []
+
+
+@pytest.mark.parametrize("interval", ["30m", "4h", "8h", "3d", "1w"])
+def test_futures_ws_candle_parser_infers_supported_interval_from_channel(monkeypatch, interval):
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+    from utils.time_utils import parse_interval
+
+    class CandleStub:
+        def __init__(self):
+            self.rows = []
+
+        def on_candle(self, pair, timeframe, candle):
+            self.rows.append((pair, timeframe, candle))
+
+    now_s = 1_800_000_000
+    duration_s = int(parse_interval(interval).total_seconds())
+    open_s = now_s - (now_s % duration_s)
+    monkeypatch.setattr("exchange.coindcx_ws.time.time", lambda: now_s)
+    builder = CandleStub()
+    stream = CoinDCXFuturesStream(builder, CoinDCXRest())
+    stream._handle_candlestick({
+        "channel": f"candlestick@B-BTC_USDT_{interval}-futures",
+        "data": {
+            "open_time": open_s,
+            "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10,
+        },
+    })
+
+    assert len(builder.rows) == 1
+    assert builder.rows[0][0:2] == ("B-BTC_USDT", interval)
