@@ -20,6 +20,7 @@ class CoinDCXRest:
         self._ticker_snapshot = None
         self._ticker_snapshot_at = 0.0
         self._ticker_lock = asyncio.Lock()
+        self._orderbook_cache: Dict[str, tuple] = {}
         self._ws_prices: Dict[str, tuple] = {}
         self._ws_last_update_ms: Optional[int] = None
         # pair -> timeframe -> consecutive stale API observations
@@ -169,6 +170,83 @@ class CoinDCXRest:
             "quote_volume": quote.get("quote_volume") or quote.get("quoteVolume") or 0,
             "base_volume": quote.get("v") or quote.get("bv") or quote.get("base_volume") or quote.get("volume") or 0,
         }
+
+    MAX_ORDERBOOK_AGE_SECONDS = 5.0
+    ORDERBOOK_CACHE_TTL_SECONDS = 1.0
+
+    @staticmethod
+    def _orderbook_levels(levels: Any) -> List[tuple]:
+        """Normalize CoinDCX orderbook levels from mapping or list payloads."""
+        if isinstance(levels, dict):
+            items = list(levels.items())
+        elif isinstance(levels, list):
+            items = []
+            for level in levels:
+                if isinstance(level, dict):
+                    items.append((level.get("price", level.get("p")),
+                                  level.get("quantity", level.get("q"))))
+                elif isinstance(level, (list, tuple)) and len(level) >= 2:
+                    items.append((level[0], level[1]))
+        else:
+            return []
+        normalized = []
+        for raw_price, raw_quantity in items:
+            try:
+                price, quantity = float(raw_price), float(raw_quantity)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if price > 0 and quantity > 0 and __import__("math").isfinite(price) and __import__("math").isfinite(quantity):
+                normalized.append((price, quantity))
+        return normalized
+
+    async def get_futures_orderbook(self, pair: str, depth: int = 10) -> Dict[str, Any]:
+        """Return a fresh, normalized public Futures orderbook snapshot.
+
+        The endpoint is queried only for a signal candidate, not for every
+        symbol in the scan. Stale, crossed, empty, or malformed books fail closed.
+        """
+        market = str(pair or "").strip().upper()
+        if not market.startswith("B-") or not market.endswith("_USDT"):
+            raise ValueError("orderbook requires a USDT Futures instrument pair")
+        if depth not in (10, 20, 50):
+            raise ValueError("unsupported Futures orderbook depth")
+        cache_key = f"{market}:{depth}"
+        now_mono = time.monotonic()
+        cached = self._orderbook_cache.get(cache_key)
+        if cached and now_mono - cached[0] <= self.ORDERBOOK_CACHE_TTL_SECONDS:
+            return dict(cached[1])
+
+        payload = await self._get(
+            f"{self.public}/market_data/v3/orderbook/{market}-futures/{depth}"
+        )
+        if not isinstance(payload, dict):
+            raise ValueError("invalid Futures orderbook payload")
+        timestamp = payload.get("ts") or payload.get("timestamp")
+        now_ms = int(time.time() * 1000)
+        age = self._ticker_age_seconds(timestamp, now_ms)
+        if not self._is_fresh_ticker_age(age, self.MAX_ORDERBOOK_AGE_SECONDS):
+            raise ValueError("stale or missing Futures orderbook timestamp")
+
+        bids = self._orderbook_levels(payload.get("bids"))
+        asks = self._orderbook_levels(payload.get("asks"))
+        if not bids or not asks:
+            raise ValueError("Futures orderbook has no valid two-sided liquidity")
+        best_bid = max(price for price, _ in bids)
+        best_ask = min(price for price, _ in asks)
+        if best_bid <= 0 or best_ask <= best_bid:
+            raise ValueError("Futures orderbook is crossed or locked")
+        midpoint = (best_bid + best_ask) / 2.0
+        spread_bps = ((best_ask - best_bid) / midpoint) * 10_000.0
+        if not __import__("math").isfinite(spread_bps) or spread_bps < 0:
+            raise ValueError("invalid Futures orderbook spread")
+        result = {
+            "pair": market, "best_bid": best_bid, "best_ask": best_ask,
+            "mid_price": midpoint, "spread_bps": spread_bps,
+            "timestamp": self._timestamp_ms(timestamp), "age_seconds": age,
+            "depth": depth,
+        }
+        self._orderbook_cache[cache_key] = (time.monotonic(), result)
+        return dict(result)
 
     async def get_ticker(self) -> List[Dict]:
         """Return normalized Futures current-price rows. Spot data is never used."""

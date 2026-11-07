@@ -16,6 +16,7 @@ from core.cooldown_manager import CooldownManager
 from core.watchlist_manager import WatchlistManager
 from core.signal_manager import SignalManager
 from core.risk_calculator import calculate_risk, is_entry_price_actionable, classify_entry_state
+from core.market_quality import evaluate_orderbook_spread
 from strategies.normal.strategy_manager import detect_strategy
 from strategies.momentum.strategy_manager import detect_momentum_state
 from strategies.momentum import orb_detector
@@ -212,6 +213,20 @@ class SignalEngine:
 
     def set_telegram(self, tg) -> None:
         self.telegram = tg
+
+    async def _check_orderbook_spread(self, pair: str) -> tuple[bool, Optional[float], str]:
+        """Require a fresh, reasonably tight Futures book before a signal is sent."""
+        getter = getattr(self.rest, "get_futures_orderbook", None)
+        # Lightweight test adapters and legacy custom clients may not expose
+        # orderbooks. The production CoinDCXRest implementation always does.
+        if not callable(getter):
+            return True, None, "provider_not_available"
+        try:
+            snapshot = await getter(pair)
+        except Exception as exc:
+            logger.warning(f"ORDERBOOK_CHECK_FAILED pair={pair}: {exc}")
+            return False, None, "orderbook_unavailable"
+        return evaluate_orderbook_spread(snapshot, settings.futures_max_spread_bps)
 
     def on_intrabar_candle(self, pair: str, timeframe: str, candle: Dict[str, Any]) -> None:
         """Record early forming-candle momentum as watchlist context only.
@@ -1136,6 +1151,24 @@ class SignalEngine:
                 classify_entry_state(live_price, risk.entry, zone_low, zone_high, direction)
                 if live_price is not None else "EXPIRED"
             )
+            if entry_state == "IMMEDIATE":
+                spread_ok, spread_bps, spread_reason = await self._check_orderbook_spread(pair)
+                if not spread_ok:
+                    self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                    logger.info(
+                        f"ORDERBOOK_SPREAD_REJECT pair={pair} engine={engine} "
+                        f"reason={spread_reason} spread_bps={spread_bps} "
+                        f"max_spread_bps={settings.futures_max_spread_bps}"
+                    )
+                    self._log_candle_evaluation(
+                        pair, engine, direction, candle_ts, candle_close_ms,
+                        confirm_candle_time_ms, indicators, "REJECT",
+                        failed=[f"orderbook_{spread_reason}"], strategy=strategy,
+                        score=result.total, score_parts=score_parts,
+                    )
+                    return
+                if spread_bps is not None:
+                    signal["indicators"]["spread_bps"] = round(spread_bps, 3)
             if entry_state == "RETEST":
                 # Preserve this qualified setup briefly. It can alert only if a
                 # fresh Futures LTP returns to the original entry band without
@@ -1401,7 +1434,19 @@ class SignalEngine:
                 continue
             if delivery_price is None or classify_entry_state(float(delivery_price), pending["entry"], pending["zone_low"], pending["zone_high"], direction) != "IMMEDIATE":
                 continue
+            spread_ok, spread_bps, spread_reason = await self._check_orderbook_spread(pair)
+            if not spread_ok:
+                self.pending_retest_failures += 1
+                logger.info(
+                    f"RETEST_ORDERBOOK_REJECT pair={pair} engine={engine} "
+                    f"reason={spread_reason} spread_bps={spread_bps} "
+                    f"max_spread_bps={settings.futures_max_spread_bps}"
+                )
+                continue
             signal = dict(signal)
+            if spread_bps is not None:
+                signal["indicators"] = dict(signal.get("indicators") or {})
+                signal["indicators"]["spread_bps"] = round(spread_bps, 3)
             signal_age = candle_age_seconds(
                 int(utc_now().timestamp() * 1000), candle_ts,
                 int(parse_interval(settings.candle_primary_tf).total_seconds() * 1000),

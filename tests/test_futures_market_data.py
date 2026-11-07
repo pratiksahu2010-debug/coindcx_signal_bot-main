@@ -539,3 +539,79 @@ def test_futures_ws_candle_parser_infers_configured_interval_from_channel():
     })
     assert len(builder.rows) == 1
     assert builder.rows[0][0:2] == ("B-BTC_USDT", "1h")
+
+
+
+@pytest.mark.asyncio
+async def test_futures_orderbook_normalizes_top_of_book_and_spread(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        assert url.endswith("/market_data/v3/orderbook/B-BTC_USDT-futures/10")
+        return {
+            "ts": now_ms,
+            "bids": {"100.0": "2.0", "99.5": "4.0"},
+            "asks": {"100.2": "3.0", "101.0": "5.0"},
+        }
+
+    client._get = fake_get
+    book = await client.get_futures_orderbook("B-BTC_USDT")
+    assert book["best_bid"] == 100.0
+    assert book["best_ask"] == 100.2
+    assert book["spread_bps"] == pytest.approx(19.98001998)
+    assert book["age_seconds"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_futures_orderbook_rejects_stale_or_crossed_book(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def stale_get(url, params=None):
+        return {
+            "ts": now_ms - 10_000,
+            "bids": {"100": "1"},
+            "asks": {"101": "1"},
+        }
+
+    client._get = stale_get
+    with pytest.raises(ValueError, match="stale"):
+        await client.get_futures_orderbook("B-BTC_USDT")
+
+    async def crossed_get(url, params=None):
+        return {
+            "ts": now_ms,
+            "bids": {"101": "1"},
+            "asks": {"100": "1"},
+        }
+
+    client._get = crossed_get
+    with pytest.raises(ValueError, match="crossed"):
+        await client.get_futures_orderbook("B-BTC_USDT")
+
+
+@pytest.mark.asyncio
+async def test_futures_orderbook_rejects_missing_two_sided_liquidity(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    async def fake_get(url, params=None):
+        return {"ts": now_ms, "bids": {"100": "1"}, "asks": {}}
+
+    client._get = fake_get
+    with pytest.raises(ValueError, match="two-sided"):
+        await client.get_futures_orderbook("B-BTC_USDT")
+
+
+def test_orderbook_spread_gate_is_fail_closed_and_respects_configured_limit():
+    from core.market_quality import evaluate_orderbook_spread
+
+    assert evaluate_orderbook_spread({"spread_bps": 12.5}, 20.0) == (True, 12.5, "ok")
+    assert evaluate_orderbook_spread({"spread_bps": 25.0}, 20.0) == (False, 25.0, "spread_too_wide")
+    assert evaluate_orderbook_spread({}, 20.0) == (False, None, "orderbook_unavailable")
+    assert evaluate_orderbook_spread({"spread_bps": float("nan")}, 20.0)[0] is False
+    assert evaluate_orderbook_spread({"spread_bps": 5.0}, 0.0)[0] is False

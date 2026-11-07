@@ -52,6 +52,7 @@ if HAS_PYDANTIC:
         candle_close_grace_seconds: int = Field(default=3, alias="CANDLE_CLOSE_GRACE_SECONDS")
         max_signal_age_seconds: int = Field(default=120, alias="MAX_SIGNAL_AGE_SECONDS")
         futures_round_trip_cost_bps: float = Field(default=15.0, alias="FUTURES_ROUND_TRIP_COST_BPS")
+        futures_max_spread_bps: float = Field(default=20.0, alias="FUTURES_MAX_SPREAD_BPS")
         orb_enabled: bool = Field(default=True, alias="ORB_ENABLED")
         orb_london_enabled: bool = Field(default=True, alias="ORB_LONDON_ENABLED")
         orb_new_york_enabled: bool = Field(default=True, alias="ORB_NEW_YORK_ENABLED")
@@ -126,6 +127,7 @@ else:
             self.candle_close_grace_seconds = int(os.getenv("CANDLE_CLOSE_GRACE_SECONDS", "3"))
             self.max_signal_age_seconds = int(os.getenv("MAX_SIGNAL_AGE_SECONDS", "120"))
             self.futures_round_trip_cost_bps = float(os.getenv("FUTURES_ROUND_TRIP_COST_BPS", "15.0"))
+            self.futures_max_spread_bps = float(os.getenv("FUTURES_MAX_SPREAD_BPS", "20.0"))
             self.orb_enabled = os.getenv("ORB_ENABLED", "true").lower() == "true"
             self.orb_london_enabled = os.getenv("ORB_LONDON_ENABLED", "true").lower() == "true"
             self.orb_new_york_enabled = os.getenv("ORB_NEW_YORK_ENABLED", "true").lower() == "true"
