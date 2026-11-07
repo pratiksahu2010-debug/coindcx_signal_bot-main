@@ -46,7 +46,11 @@ def _validated_indicators(indicators: Dict[str, Any]) -> Dict[str, Any]:
             clean[key] = value
 
     for key in _BOOLEAN_KEYS:
-        value = clean.get(key, False)
+        value = clean.get(key)
+        if value is None and key == "di_direction_ok":
+            # Preserve the tri-state meaning: unavailable DI is not opposition.
+            clean[key] = None
+            continue
         # Accept native and NumPy booleans, but never truthy strings or numbers.
         clean[key] = value is True or type(value).__name__ == "bool_" and bool(value)
     return clean
@@ -317,7 +321,8 @@ class ScoringEngine:
             body, direction, f"Body ratio {body:.2f}", body >= 0.45
         ))
 
-        location = float(indicators.get("close_location", 0.5))
+        raw_location = indicators.get("close_location")
+        location = float(0.5 if raw_location is None else raw_location)
         aligned_location = location if is_long else 1.0 - location
         components.append(ScoreComponent(
             "Directional Close", 0.75 if aligned_location >= 0.58 else 0.0, 0.75,
