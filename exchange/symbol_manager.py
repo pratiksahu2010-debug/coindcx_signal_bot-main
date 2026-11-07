@@ -211,10 +211,14 @@ class SymbolManager:
                     discovered_by_key[key] = market
         self.whitelist_diagnostics.clear()
 
-        def rank_universe(preferences: Dict[str, int], limit: int, label: str) -> List[str]:
-            # Static allowlist order is authoritative for every engine. Active
-            # Futures data validates availability; turnover may exclude a thin
-            # candidate but never adds, reorders, or substitutes symbols.
+        def rank_universe(
+            preferences: Dict[str, int], limit: int, minimum_turnover: float, label: str
+        ) -> List[str]:
+            # Preserve curated allowlist order for every listed, liquid symbol.
+            # If contracts are delisted or fall below the engine's liquidity
+            # floor, fill the vacant slots from active CoinDCX Futures markets
+            # ranked by estimated 24h quote turnover. Never add Spot-only,
+            # stablecoin, inactive, or below-floor markets.
             configured = list(preferences.keys())
             available_by_key = {self._norm(pair): pair for pair in self.valid_pairs}
             selected: List[str] = []
@@ -254,10 +258,41 @@ class SymbolManager:
                     f"{label.upper()}_STATIC_SYMBOLS_UNAVAILABLE count={len(missing)} "
                     f"symbols={','.join(missing)}"
                 )
+
+            # Count static candidates that will actually survive this engine's
+            # turnover gate. This avoids underfilling when a listed allowlist
+            # member is active but too illiquid for the configured strategy.
+            static_eligible = sum(
+                self.liquidity.get(pair, 0.0) >= minimum_turnover for pair in selected
+            )
+            fallback_needed = max(0, int(limit) - static_eligible)
+            if fallback_needed:
+                selected_set = set(selected)
+                fallback = sorted(
+                    (
+                        pair for pair in self.valid_pairs
+                        if pair not in selected_set
+                        and self.liquidity.get(pair, 0.0) >= minimum_turnover
+                    ),
+                    key=lambda pair: (-self.liquidity.get(pair, 0.0), pair),
+                )[:fallback_needed]
+                selected.extend(fallback)
+                if fallback:
+                    logger.info(
+                        f"{label.upper()}_DYNAMIC_SYMBOL_FALLBACK added={len(fallback)} "
+                        f"target={limit} minimum_24h_turnover_usdt={minimum_turnover:.0f} "
+                        f"symbols={','.join(fallback)}"
+                    )
             return selected
 
-        self._ranked_normal = rank_universe(normal_rank, settings.normal_symbol_limit, "Normal")
-        self._ranked_momentum = rank_universe(momentum_rank, settings.momentum_symbol_limit, "Momentum")
+        self._ranked_normal = rank_universe(
+            normal_rank, settings.normal_symbol_limit,
+            settings.normal_min_24h_turnover_usdt, "Normal",
+        )
+        self._ranked_momentum = rank_universe(
+            momentum_rank, settings.momentum_symbol_limit,
+            settings.momentum_min_24h_turnover_usdt, "Momentum",
+        )
         self._last_liquidity_refresh = __import__("time").time()
         self._select_active_symbols()
         logger.info(
