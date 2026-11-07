@@ -31,6 +31,9 @@ class CoinDCXRest:
         self._orderbook_cache: Dict[str, tuple] = {}
         self._ws_prices: Dict[str, tuple] = {}
         self._ws_last_update_ms: Optional[int] = None
+        self._last_ws_price_prune_mono = 0.0
+        self.MAX_WS_PRICE_CACHE_ENTRIES = 2000
+        self.WS_PRICE_CACHE_PRUNE_INTERVAL_SECONDS = 30.0
         # pair -> timeframe -> consecutive stale API observations
         self._stale_market_timeframes: Dict[str, Dict[str, int]] = {}
         self.request_count = 0
@@ -371,6 +374,31 @@ class CoinDCXRest:
         """Return a copy of stale candle-feed observations for universe quarantine."""
         return {pair: dict(timeframes) for pair, timeframes in self._stale_market_timeframes.items()}
 
+    def _prune_ws_price_cache(self, now_ms: Optional[int] = None, force: bool = False) -> None:
+        """Expire stale Futures quotes and cap retained markets to a fixed bound."""
+        now_mono = time.monotonic()
+        if (
+            not force
+            and now_mono - self._last_ws_price_prune_mono
+            < self.WS_PRICE_CACHE_PRUNE_INTERVAL_SECONDS
+            and len(self._ws_prices) <= self.MAX_WS_PRICE_CACHE_ENTRIES
+        ):
+            return
+        current_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        cutoff_ms = current_ms - int(self.MAX_WS_TICKER_AGE_SECONDS * 1000)
+        self._ws_prices = {
+            key: value for key, value in self._ws_prices.items()
+            if isinstance(value, tuple) and len(value) >= 2 and value[1] >= cutoff_ms
+        }
+        if len(self._ws_prices) > self.MAX_WS_PRICE_CACHE_ENTRIES:
+            newest = sorted(
+                self._ws_prices.items(),
+                key=lambda item: item[1][1],
+                reverse=True,
+            )[:self.MAX_WS_PRICE_CACHE_ENTRIES]
+            self._ws_prices = dict(newest)
+        self._last_ws_price_prune_mono = now_mono
+
     def set_ws_prices(self, prices: Dict[str, Any], timestamp_ms: Optional[int] = None) -> int:
         """Accept Futures LTP updates; nested market payloads use ls, never mark price."""
         now_ms = int(time.time() * 1000)
@@ -407,12 +435,15 @@ class CoinDCXRest:
                     accepted += 1
             except (TypeError, ValueError, OverflowError):
                 continue
+        self._prune_ws_price_cache(now_ms)
         if accepted:
             self._ws_last_update_ms = now_ms
         return accepted
 
     async def get_last_price(self, pair: str) -> Optional[float]:
         """Return fresh Futures LTP only. Missing/stale Futures data fails closed."""
+        now_ms = int(time.time() * 1000)
+        self._prune_ws_price_cache(now_ms)
         wanted = self._market_key(pair)
         cached = self._ws_prices.get(wanted)
         now_ms = int(time.time() * 1000)
