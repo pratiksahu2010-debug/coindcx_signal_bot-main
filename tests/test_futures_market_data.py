@@ -31,6 +31,37 @@ async def test_futures_15m_candles_are_aggregated_from_three_completed_5m_bars(m
 
 
 @pytest.mark.asyncio
+async def test_candle_cache_expires_when_a_new_candle_becomes_completed(monkeypatch):
+    base = 1_800_000_000
+    now = [base + 302]
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now[0])
+    client = CoinDCXRest()
+    calls = 0
+
+    async def fake_get(url, params=None):
+        nonlocal calls
+        calls += 1
+        return [
+            {"time": base - 300, "open": 99, "high": 100, "low": 98, "close": 99, "volume": 1},
+            {"time": base, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 2},
+        ]
+
+    client._get = fake_get
+    before_close = await client.get_candles("B-BTC_USDT", "5m", limit=10)
+    assert [candle["time"] for candle in before_close] == [(base - 300) * 1000]
+
+    # Cross the 5m close plus the configured 3s grace while remaining
+    # inside the ordinary five-second cache TTL.
+    now[0] = base + 303
+    after_close = await client.get_candles("B-BTC_USDT", "5m", limit=10)
+
+    assert [candle["time"] for candle in after_close] == [
+        (base - 300) * 1000, base * 1000
+    ]
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_futures_15m_candles_must_fit_entire_requested_window(monkeypatch):
     base = 1_800_000_000
     now = base + 1200
