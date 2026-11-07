@@ -328,6 +328,8 @@ class CoinDCXRest:
         """Fetch completed Futures candles; synthesize 15m from three Futures 5m bars."""
         # Validate the request before constructing cache keys or making exchange
         # calls. In particular, limit=0 makes Python's [-0:] return every candle.
+        if isinstance(limit, bool) or (isinstance(limit, float) and not limit.is_integer()):
+            raise ValueError("Candle limit must be an integer between 1 and 1000")
         try:
             limit = int(limit)
         except (TypeError, ValueError, OverflowError) as exc:
@@ -336,6 +338,7 @@ class CoinDCXRest:
             raise ValueError("Candle limit must be between 1 and 1000")
         if not isinstance(pair, str) or not pair.strip():
             raise ValueError("Futures pair must be a non-empty string")
+        pair = pair.strip()
         if start_time is not None:
             try:
                 start_time = int(start_time)
