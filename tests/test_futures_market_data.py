@@ -31,6 +31,33 @@ async def test_futures_15m_candles_are_aggregated_from_three_completed_5m_bars(m
 
 
 @pytest.mark.asyncio
+async def test_futures_15m_candles_must_fit_entire_requested_window(monkeypatch):
+    base = 1_800_000_000
+    now = base + 1200
+    start_ms = base * 1000
+    # The three 5m bars are present, but the requested end cuts off the
+    # final 5m bar before the synthesized 15m candle has closed.
+    end_ms = (base + 899) * 1000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now)
+    client = CoinDCXRest()
+
+    async def fake_get(url, params=None):
+        return [
+            {"time": base, "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10},
+            {"time": base + 300, "open": 101, "high": 103, "low": 100, "close": 102, "volume": 20},
+            {"time": base + 600, "open": 102, "high": 104, "low": 101, "close": 103, "volume": 30},
+        ]
+
+    client._get = fake_get
+    candles = await client.get_candles(
+        "B-BTC_USDT", "15m", limit=10,
+        start_time=start_ms, end_time=end_ms,
+    )
+
+    assert candles == []
+
+
+@pytest.mark.asyncio
 async def test_futures_candles_exclude_rows_outside_requested_time_window(monkeypatch):
     base = 1_800_000_000
     now = base + 920
