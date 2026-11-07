@@ -31,8 +31,8 @@ def test_delivery_worker_sends_each_claimed_item_to_its_recipient(monkeypatch):
         }]
         completed = []
         monkeypatch.setattr(repositories, "expire_stale_signal_deliveries", lambda: _true())
-        monkeypatch.setattr(repositories, "claim_due_signal_deliveries", lambda limit: _items(items))
-        monkeypatch.setattr(repositories, "complete_signal_delivery", lambda key: _complete(key, completed))
+        monkeypatch.setattr(repositories, "claim_due_signal_deliveries", lambda limit, lease_seconds=90: _items(items))
+        monkeypatch.setattr(repositories, "complete_signal_delivery", lambda key, attempts=None: _complete(key, completed))
         telegram = FakeTelegram()
         worker = TelegramDeliveryWorker(telegram)
         assert await worker.run_once() == 1
@@ -73,7 +73,7 @@ def test_delivery_worker_retries_failed_recipient(monkeypatch):
         async def no_expiry():
             return 0
 
-        async def claim(limit):
+        async def claim(limit, lease_seconds=90):
             return items
 
         monkeypatch.setattr(repositories, "expire_stale_signal_deliveries", no_expiry)
