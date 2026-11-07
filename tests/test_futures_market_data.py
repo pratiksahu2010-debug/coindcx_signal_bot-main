@@ -824,3 +824,32 @@ def test_futures_ws_candle_parser_infers_supported_interval_from_channel(monkeyp
 
     assert len(builder.rows) == 1
     assert builder.rows[0][0:2] == ("B-BTC_USDT", interval)
+
+
+def test_futures_ws_rejects_delayed_candle_after_interval_close(monkeypatch):
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    class CandleStub:
+        def __init__(self):
+            self.rows = []
+
+        def on_candle(self, pair, interval, candle):
+            self.rows.append((pair, interval, candle))
+
+    base = 1_800_000_000
+    # The 5m candle opened at base and is now exactly closed. Even though
+    # it is inside the previous broad freshness allowance, it is no longer
+    # forming-candle context and must not mutate the websocket buffer.
+    monkeypatch.setattr("exchange.coindcx_ws.time.time", lambda: base + 300)
+    builder = CandleStub()
+    stream = CoinDCXFuturesStream(builder, CoinDCXRest())
+    stream._handle_candlestick({
+        "channel": "B-BTC_USDT_5m-futures",
+        "data": {
+            "open_time": base,
+            "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10,
+        },
+    })
+
+    assert builder.rows == []
+    assert stream._last_event_ms is None
