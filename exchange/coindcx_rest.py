@@ -434,11 +434,22 @@ class CoinDCXRest:
         )
         return None
 
+    def _record_candle_feed_observation(self, pair: str, interval: str, available: bool) -> None:
+        """Track unavailable as well as stale candle feeds for symbol quarantine."""
+        if available:
+            self._stale_market_timeframes.get(pair, {}).pop(interval, None)
+            return
+        counts = self._stale_market_timeframes.setdefault(pair, {})
+        counts[interval] = counts.get(interval, 0) + 1
+
     async def get_candles(
         self, pair: str, interval: str = "5m", limit: int = 200,
         start_time: Optional[int] = None, end_time: Optional[int] = None,
     ) -> List[Dict]:
         """Fetch completed Futures candles; synthesize 15m from three Futures 5m bars."""
+        # Only default live-scan windows contribute to symbol feed health.
+        # Explicit historical/backfill requests must not quarantine a market.
+        track_feed_health = start_time is None and end_time is None
         # Validate the request before constructing cache keys or making exchange
         # calls. In particular, limit=0 makes Python's [-0:] return every candle.
         if isinstance(limit, bool) or (isinstance(limit, float) and not limit.is_integer()):
@@ -496,7 +507,10 @@ class CoinDCXRest:
                     "close": bars[-1]["close"],
                     "volume": sum(x["volume"] for x in bars),
                 })
-            return result[-limit:]
+            result = result[-limit:]
+            if track_feed_health:
+                self._record_candle_feed_observation(pair, interval, bool(result))
+            return result
 
         resolution_map = {"1m": "1", "5m": "5", "1h": "60", "1d": "1D"}
         resolution = resolution_map.get(interval)
@@ -536,6 +550,8 @@ class CoinDCXRest:
             break
         data = payload
         if not isinstance(data, list):
+            if track_feed_health:
+                self._record_candle_feed_observation(pair, interval, False)
             return []
         normalized = []
         for row in data:
@@ -576,12 +592,16 @@ class CoinDCXRest:
             age = (now_ms - latest_close) / 1000
             stale_limit = max(float(settings.max_signal_age_seconds), duration_ms * 2 / 1000)
             if age > stale_limit:
-                counts = self._stale_market_timeframes.setdefault(pair, {})
-                counts[interval] = counts.get(interval, 0) + 1
+                if track_feed_health:
+                    self._record_candle_feed_observation(pair, interval, False)
                 logger.warning(f"FUTURES_CANDLES_STALE {pair} {interval} age={age:.1f}s; rejected")
                 candles = []
-            else:
-                self._stale_market_timeframes.get(pair, {}).pop(interval, None)
+            elif track_feed_health:
+                self._record_candle_feed_observation(pair, interval, True)
+        elif track_feed_health:
+            # Empty, malformed, or entirely unfinished responses are unavailable
+            # live-feed observations too; otherwise these symbols evade quarantine.
+            self._record_candle_feed_observation(pair, interval, False)
         self._candle_cache[cache_key] = (time.monotonic(), [dict(x) for x in candles])
         # Bound memory when many symbols/time windows are scanned.
         if len(self._candle_cache) > 1000:
