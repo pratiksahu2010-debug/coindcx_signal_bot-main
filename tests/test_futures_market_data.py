@@ -921,3 +921,46 @@ def test_futures_ws_out_of_order_candle_does_not_reach_intrabar_callback(monkeyp
     assert len(buffered) == 1
     assert buffered[0]["time"] == base + 300_000
     assert callbacks == []
+
+
+@pytest.mark.asyncio
+async def test_empty_live_candle_response_is_tracked_and_fresh_response_clears_it(monkeypatch):
+    base = 1_800_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: base + 600)
+    client = CoinDCXRest()
+
+    async def empty_get(url, params=None):
+        return []
+
+    client._get = empty_get
+    assert await client.get_candles("B-BTC_USDT", "5m", limit=10) == []
+    assert client.get_stale_market_timeframes() == {"B-BTC_USDT": {"5m": 1}}
+
+    async def fresh_get(url, params=None):
+        return [{
+            "time": base, "open": 100, "high": 102,
+            "low": 99, "close": 101, "volume": 10,
+        }]
+
+    client._get = fresh_get
+    client._candle_cache.clear()
+    candles = await client.get_candles("B-BTC_USDT", "5m", limit=10)
+    assert len(candles) == 1
+    assert client.get_stale_market_timeframes() == {"B-BTC_USDT": {}}
+
+
+@pytest.mark.asyncio
+async def test_incomplete_synthesized_15m_feed_is_tracked_as_unavailable(monkeypatch):
+    base = 1_800_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: base + 1200)
+    client = CoinDCXRest()
+
+    async def incomplete_get(url, params=None):
+        return [
+            {"time": base, "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10},
+            {"time": base + 300, "open": 101, "high": 103, "low": 100, "close": 102, "volume": 20},
+        ]
+
+    client._get = incomplete_get
+    assert await client.get_candles("B-BTC_USDT", "15m", limit=10) == []
+    assert client.get_stale_market_timeframes() == {"B-BTC_USDT": {"15m": 1}}
