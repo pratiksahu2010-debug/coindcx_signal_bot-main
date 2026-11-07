@@ -257,7 +257,7 @@ class SignalEngine:
             avg_volume = float(np.mean(volume[-21:-1]))
             if avg_volume <= 0 or live_close <= 0:
                 return
-            rvol_live = float(volume[-1]) / avg_volume
+            rvol_live = float(candle.get("volume", 0.0)) / avg_volume
             short_roc = (live_close / float(close[-4]) - 1.0) * 100.0
             if rvol_live < 1.2 or abs(short_roc) < 0.08:
                 return
