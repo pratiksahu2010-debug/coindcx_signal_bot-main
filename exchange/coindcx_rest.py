@@ -10,6 +10,14 @@ from utils.logger import logger
 from utils.retry import async_retry
 
 
+def _should_retry_coindcx_request(exc: Exception) -> bool:
+    """Retry transport failures, rate limits and server errors, not permanent 4xx."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status in (408, 425, 429) or status >= 500
+    return True
+
+
 class CoinDCXRest:
     def __init__(self):
         self.base = settings.coindcx_rest_base
@@ -42,7 +50,7 @@ class CoinDCXRest:
             await self._client.aclose()
             self._client = None
 
-    @async_retry(max_attempts=3, delay=1.0)
+    @async_retry(max_attempts=3, delay=1.0, retry_if=_should_retry_coindcx_request)
     async def _get(self, url: str, params: Optional[Dict] = None) -> Any:
         async with self._semaphore:
             assert self._client is not None
