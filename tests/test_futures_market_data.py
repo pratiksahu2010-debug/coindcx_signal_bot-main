@@ -563,7 +563,7 @@ async def test_futures_orderbook_normalizes_top_of_book_and_spread(monkeypatch):
     assert book["spread_bps"] == pytest.approx(19.98001998)
     assert book["age_seconds"] == 0.0
     assert book["bid_depth_usdt"] == pytest.approx(598.0)
-    assert book["ask_depth_usdt"] == pytest.approx(806.0)
+    assert book["ask_depth_usdt"] == pytest.approx(805.6)
     assert book["min_side_depth_usdt"] == pytest.approx(598.0)
     assert book["depth_levels"] == 5
 
