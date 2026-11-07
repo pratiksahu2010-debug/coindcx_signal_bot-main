@@ -1467,9 +1467,12 @@ class SignalEngine:
                 )
                 continue
             signal = dict(signal)
-            if spread_bps is not None:
+            if spread_bps is not None or depth_usdt is not None:
                 signal["indicators"] = dict(signal.get("indicators") or {})
+            if spread_bps is not None:
                 signal["indicators"]["spread_bps"] = round(spread_bps, 3)
+            if depth_usdt is not None:
+                signal["indicators"]["orderbook_min_side_depth_usdt"] = round(depth_usdt, 2)
             signal_age = candle_age_seconds(
                 int(utc_now().timestamp() * 1000), candle_ts,
                 int(parse_interval(settings.candle_primary_tf).total_seconds() * 1000),
