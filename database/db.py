@@ -12,13 +12,34 @@ class Base(DeclarativeBase):
 
 
 async def _upgrade_postgres_schema(conn) -> None:
-    """Apply idempotent PostgreSQL type fixes not handled by create_all."""
+    """Apply idempotent schema fixes not handled by create_all."""
     if conn.dialect.name == "postgresql":
         # Unix timestamps in milliseconds exceed PostgreSQL INTEGER's 32-bit range.
-        # ALTER is safe for existing rows and repeated startup/deploys.
         await conn.execute(text(
             "ALTER TABLE signal_dedup ALTER COLUMN candle_time_ms TYPE BIGINT"
         ))
+
+    # Keep the original outbox enqueue time immutable so queue-age metrics do
+    # not reset when a worker claims or retries a delivery. This migration is
+    # portable across PostgreSQL and SQLite; legacy rows use their last known
+    # update timestamp as the best available approximation.
+    tables = await conn.run_sync(
+        lambda sync_conn: __import__("sqlalchemy").inspect(sync_conn).get_table_names()
+    )
+    if "signal_delivery_outbox" in tables:
+        columns = await conn.run_sync(
+            lambda sync_conn: {
+                column["name"] for column in
+                __import__("sqlalchemy").inspect(sync_conn).get_columns("signal_delivery_outbox")
+            }
+        )
+        if "created_at" not in columns:
+            await conn.execute(text(
+                "ALTER TABLE signal_delivery_outbox ADD COLUMN created_at TIMESTAMP"
+            ))
+            await conn.execute(text(
+                "UPDATE signal_delivery_outbox SET created_at = updated_at WHERE created_at IS NULL"
+            ))
 
 
 engine = None
