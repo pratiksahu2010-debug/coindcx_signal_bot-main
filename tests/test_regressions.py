@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 import numpy as np
 from core.signal_manager import SignalManager
 from core.risk_calculator import calculate_risk
-from exchange.candle_builder import CandleBuffer
+from exchange.candle_builder import CandleBuffer, CandleBuilder
 
 
 def test_signal_can_reenter_after_terminal_state():
@@ -920,3 +920,40 @@ def test_intrabar_momentum_rvol_uses_live_candle_volume(monkeypatch):
     entries = engine.watchlists["momentum"].list_all("momentum")
     assert len(entries) == 1
     assert entries[0]["indicators"]["live_rvol"] == 10.0
+
+
+
+def test_candle_builder_keeps_existing_buffer_when_rest_seed_has_no_valid_rows():
+    builder = CandleBuilder()
+    original = {
+        "time": 1_000, "open": 100, "high": 102,
+        "low": 99, "close": 101, "volume": 10,
+    }
+    builder.seed("B-BTC_USDT", "5m", [original])
+    buffer = builder.get_buffer("B-BTC_USDT", "5m")
+
+    builder.seed("B-BTC_USDT", "5m", [])
+    assert len(buffer) == 1
+    assert buffer.last_close() == 101.0
+
+    builder.seed("B-BTC_USDT", "5m", [
+        {**original, "time": 2_000, "close": float("nan")},
+        {"time": 3_000, "open": 100},
+    ])
+    assert len(buffer) == 1
+    assert buffer.last_close() == 101.0
+
+
+def test_candle_builder_replaces_buffer_with_valid_rest_refresh():
+    builder = CandleBuilder()
+    builder.seed("B-BTC_USDT", "5m", [
+        {"time": 1_000, "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10},
+        {"time": 2_000, "open": 101, "high": 103, "low": 100, "close": 102, "volume": 11},
+    ])
+    builder.seed("B-BTC_USDT", "5m", [
+        {"time": 3_000, "open": 102, "high": 104, "low": 101, "close": 103, "volume": 12},
+    ])
+    buffer = builder.get_buffer("B-BTC_USDT", "5m")
+    assert len(buffer) == 1
+    assert buffer.candles[0]["time"] == 3_000
+    assert buffer.last_close() == 103.0
