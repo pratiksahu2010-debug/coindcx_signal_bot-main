@@ -165,7 +165,8 @@ class CoinDCXFuturesStream:
                 interval = duration if duration else None
                 if interval not in ("1m", "5m", "15m", "30m", "1h", "4h", "8h", "1d", "3d", "1w", "1M"):
                     channel = str(row.get("channel") or outer_channel or "")
-                    interval = next((x for x in ("5m", "15m") if x in channel), None)
+                    match = re.search(r"_(1m|5m|15m|1h|1d)-futures", channel.lower())
+                    interval = match.group(1) if match else None
                 if interval:
                     self.candles.on_candle(pair, interval, candle)
                     if self.on_candle_callback is not None:
@@ -187,8 +188,11 @@ class CoinDCXFuturesStream:
         # Build the complete desired set before connecting. The connect handler
         # performs the joins on both the initial connection and every reconnect.
         self._channels = {"currentPrices@futures@rt"}
+        # Subscribe to the exact timeframes consumed by the configured engines.
+        # A fixed 5m/15m subscription silently starves valid custom configurations.
+        intervals = tuple(dict.fromkeys((settings.candle_primary_tf, settings.candle_confirm_tf)))
         for pair in sorted(set(pairs)):
-            for interval in ("5m", "15m"):
+            for interval in intervals:
                 self._channels.add(f"{pair}_{interval}-futures")
         try:
             await self.client.connect(

@@ -326,6 +326,35 @@ class CoinDCXRest:
         start_time: Optional[int] = None, end_time: Optional[int] = None,
     ) -> List[Dict]:
         """Fetch completed Futures candles; synthesize 15m from three Futures 5m bars."""
+        # Validate the request before constructing cache keys or making exchange
+        # calls. In particular, limit=0 makes Python's [-0:] return every candle.
+        if isinstance(limit, bool) or (isinstance(limit, float) and not limit.is_integer()):
+            raise ValueError("Candle limit must be an integer between 1 and 1000")
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Candle limit must be an integer between 1 and 1000") from exc
+        if limit < 1 or limit > 1000:
+            raise ValueError("Candle limit must be between 1 and 1000")
+        if not isinstance(pair, str) or not pair.strip():
+            raise ValueError("Futures pair must be a non-empty string")
+        pair = pair.strip()
+        if start_time is not None:
+            try:
+                start_time = int(start_time)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("start_time must be a positive Unix timestamp in milliseconds") from exc
+            if start_time <= 0:
+                raise ValueError("start_time must be a positive Unix timestamp in milliseconds")
+        if end_time is not None:
+            try:
+                end_time = int(end_time)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("end_time must be a positive Unix timestamp in milliseconds") from exc
+            if end_time <= 0:
+                raise ValueError("end_time must be a positive Unix timestamp in milliseconds")
+        if start_time is not None and end_time is not None and start_time >= end_time:
+            raise ValueError("start_time must be earlier than end_time")
         if interval == "15m":
             end_ms = int(end_time or time.time() * 1000)
             start_ms = int(start_time or (end_ms - max(limit + 5, 100) * 15 * 60 * 1000))
