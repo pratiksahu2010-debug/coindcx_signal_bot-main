@@ -51,12 +51,22 @@ async def health(request: Request):
             settings.enable_momentum_engine and int(state.get("valid_symbols_momentum") or 0) <= 0
         )
         telegram_unavailable = settings.is_production and not telegram_delivery_ready
+        scan_task_failed = (
+            bool(state.get("scan_task_expected"))
+            and state.get("scan_task_status") in ("failed", "stopped")
+        )
+        delivery_task_failed = (
+            bool(state.get("telegram_delivery_task_expected"))
+            and state.get("telegram_delivery_task_status") in ("failed", "stopped")
+        )
         if (
             database == "unavailable"
             or database_paused
             or normal_symbols_missing
             or momentum_symbols_missing
             or telegram_unavailable
+            or scan_task_failed
+            or delivery_task_failed
         ):
             reasons = []
             if database == "unavailable" or database_paused:
@@ -67,6 +77,10 @@ async def health(request: Request):
                 reasons.append("momentum_universe_empty")
             if telegram_unavailable:
                 reasons.append("telegram_delivery_unavailable")
+            if scan_task_failed:
+                reasons.append("scan_loop_failed")
+            if delivery_task_failed:
+                reasons.append("telegram_delivery_worker_failed")
             return JSONResponse(
                 status_code=503,
                 content={
@@ -78,6 +92,10 @@ async def health(request: Request):
                     "valid_symbols_normal": state.get("valid_symbols_normal", 0),
                     "valid_symbols_momentum": state.get("valid_symbols_momentum", 0),
                     "telegram_delivery_ready": telegram_delivery_ready,
+                    "scan_task_status": state.get("scan_task_status", "unknown"),
+                    "scan_task_error": state.get("scan_task_error"),
+                    "telegram_delivery_task_status": state.get("telegram_delivery_task_status", "unknown"),
+                    "telegram_delivery_task_error": state.get("telegram_delivery_task_error"),
                     "reasons": reasons,
                 },
             )
@@ -127,6 +145,13 @@ async def status(request: Request) -> Dict[str, Any]:
         "normal_engine": app_state.get("normal_engine", "unknown"),
         "momentum_engine": app_state.get("momentum_engine", "unknown"),
         "last_scan": app_state.get("last_scan"),
+        "scan_task_expected": app_state.get("scan_task_expected", False),
+        "scan_task_status": app_state.get("scan_task_status", "unknown"),
+        "scan_task_error": app_state.get("scan_task_error"),
+        "retest_task_status": app_state.get("retest_task_status", "unknown"),
+        "retest_task_error": app_state.get("retest_task_error"),
+        "telegram_delivery_task_status": app_state.get("telegram_delivery_task_status", "unknown"),
+        "telegram_delivery_task_error": app_state.get("telegram_delivery_task_error"),
         "active_signals": app_state.get("active_signals", 0),
         "watchlist_count": app_state.get("watchlist_count", 0),
         "scan_errors_normal": app_state.get("scan_errors_normal", 0),

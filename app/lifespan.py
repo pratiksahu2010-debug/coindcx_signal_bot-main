@@ -20,6 +20,24 @@ from tgbot.delivery_worker import TelegramDeliveryWorker
 from database.db import init_db, dispose_db
 
 
+def _watch_background_task(task: asyncio.Task, state: dict, name: str) -> None:
+    """Expose unexpected background-task termination to readiness and status."""
+    def _completed(done: asyncio.Task) -> None:
+        if done.cancelled():
+            status, error = "stopped", "task_cancelled"
+        else:
+            exc = done.exception()
+            status = "failed" if exc is not None else "stopped"
+            error = f"{type(exc).__name__}: {exc}"[:500] if exc is not None else "task_exited"
+        state[f"{name}_status"] = status
+        state[f"{name}_error"] = error
+        logger.error(
+            f"BACKGROUND_TASK_EXITED task={name} status={status} error={error}"
+        )
+
+    task.add_done_callback(_completed)
+
+
 def validate_runtime_config() -> None:
     """Fail fast on invalid timeframe and safety-critical runtime settings."""
     # Parse first so malformed/non-positive values retain their precise errors.
@@ -130,6 +148,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ),
         "normal_engine": "starting" if settings.enable_normal_engine else "disabled",
         "momentum_engine": "starting" if settings.enable_momentum_engine else "disabled",
+        "scan_task_expected": bool(
+            database_ready and (settings.enable_normal_engine or settings.enable_momentum_engine)
+        ),
+        "scan_task_status": (
+            "starting" if database_ready and (settings.enable_normal_engine or settings.enable_momentum_engine)
+            else "paused_database_unavailable" if not database_ready else "disabled"
+        ),
+        "scan_task_error": None,
+        "retest_task_status": "starting" if database_ready else "paused_database_unavailable",
+        "retest_task_error": None,
+        "telegram_delivery_task_expected": bool(database_ready and tg.bot and tg.admin_ids),
+        "telegram_delivery_task_status": "starting" if database_ready and tg.bot and tg.admin_ids else "disabled",
+        "telegram_delivery_task_error": None,
         "last_market_update": None,
         "last_scan": None,
         "active_signals": 0,
@@ -159,13 +190,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     retest_task = None
     telegram_delivery_task = None
     if database_ready:
-        scan_task = asyncio.create_task(engine.run_scan_loop(app))
-        retest_task = asyncio.create_task(engine.pending_retest_monitor_loop(interval_seconds=2.0))
+        scan_task = asyncio.create_task(engine.run_scan_loop(app), name="signal-scan-loop")
+        retest_task = asyncio.create_task(engine.pending_retest_monitor_loop(interval_seconds=2.0), name="pending-retest-loop")
+        _watch_background_task(scan_task, app.state.bot_state, "scan_task")
+        _watch_background_task(retest_task, app.state.bot_state, "retest_task")
         if tg.bot and tg.admin_ids:
-            telegram_delivery_task = asyncio.create_task(delivery_worker.run_forever())
+            telegram_delivery_task = asyncio.create_task(
+                delivery_worker.run_forever(), name="telegram-delivery-loop"
+            )
+            _watch_background_task(
+                telegram_delivery_task, app.state.bot_state, "telegram_delivery_task"
+            )
     else:
         app.state.bot_state["normal_engine"] = "paused_database_unavailable"
         app.state.bot_state["momentum_engine"] = "paused_database_unavailable"
+        app.state.bot_state["retest_task_status"] = "paused_database_unavailable"
         logger.critical(
             "SIGNAL_SCANNING_DISABLED database_unavailable=true; "
             "health endpoints remain available, no market scans or alerts will run"

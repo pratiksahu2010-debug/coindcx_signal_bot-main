@@ -166,3 +166,65 @@ async def test_production_health_accepts_configured_telegram_delivery(monkeypatc
                 delattr(app.state, "telegram")
         else:
             app.state.telegram = old_telegram
+
+
+
+@pytest.mark.asyncio
+async def test_health_reports_unexpected_scan_task_exit(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(type(settings), "is_production", property(lambda self: False))
+    old_state = getattr(app.state, "bot_state", None)
+    app.state.bot_state = {
+        "database": "postgres",
+        "normal_engine": "running",
+        "momentum_engine": "running",
+        "valid_symbols_normal": 40,
+        "valid_symbols_momentum": 80,
+        "scan_task_expected": True,
+        "scan_task_status": "failed",
+        "scan_task_error": "RuntimeError: universe refresh failed",
+    }
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/health")
+            assert resp.status_code == 503
+            data = resp.json()
+            assert "scan_loop_failed" in data["reasons"]
+            assert data["scan_task_status"] == "failed"
+            assert "universe refresh failed" in data["scan_task_error"]
+    finally:
+        if old_state is None:
+            delattr(app.state, "bot_state")
+        else:
+            app.state.bot_state = old_state
+
+
+@pytest.mark.asyncio
+async def test_health_reports_unexpected_telegram_worker_exit(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(type(settings), "is_production", property(lambda self: False))
+    old_state = getattr(app.state, "bot_state", None)
+    app.state.bot_state = {
+        "database": "postgres",
+        "normal_engine": "running",
+        "momentum_engine": "running",
+        "valid_symbols_normal": 40,
+        "valid_symbols_momentum": 80,
+        "telegram_delivery_task_expected": True,
+        "telegram_delivery_task_status": "stopped",
+        "telegram_delivery_task_error": "task_exited",
+    }
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/health")
+            assert resp.status_code == 503
+            assert "telegram_delivery_worker_failed" in resp.json()["reasons"]
+    finally:
+        if old_state is None:
+            delattr(app.state, "bot_state")
+        else:
+            app.state.bot_state = old_state
