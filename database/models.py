@@ -85,4 +85,5 @@ class SignalDeliveryRecord(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime, index=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_naive_now, nullable=True, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_naive_now)
