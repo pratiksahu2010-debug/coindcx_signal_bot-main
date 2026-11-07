@@ -259,6 +259,8 @@ async def metrics(request: Request) -> Dict[str, Any]:
     app_state = getattr(request.app.state, "bot_state", {})
     mem = check_memory()
     delivery_worker = getattr(request.app.state, "telegram_delivery_worker", None)
+    from database.repositories import signal_delivery_queue_stats
+    outbox_stats = await signal_delivery_queue_stats()
     return {
         "uptime_seconds": app_state.get("uptime_seconds", 0),
         "scan_count": app_state.get("scan_count", 0),
