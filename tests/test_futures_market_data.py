@@ -1005,3 +1005,38 @@ async def test_malformed_candle_response_keeps_cache_within_size_bound(monkeypat
     client._get = malformed_get
     assert await client.get_candles("B-BTC_USDT", "5m", limit=10) == []
     assert len(client._candle_cache) <= 1000
+
+
+@pytest.mark.asyncio
+async def test_futures_orderbook_cache_prunes_expired_and_bounds_unique_markets(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    now_mono = 500.0
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+    monkeypatch.setattr("exchange.coindcx_rest.time.monotonic", lambda: now_mono)
+
+    # Simulate many symbols whose snapshots expired and were never looked up again.
+    client._orderbook_cache = {
+        f"B-OLD{index}_USDT:10": (now_mono - 10, {"timestamp": now_ms})
+        for index in range(1200)
+    }
+
+    async def fake_get(url, params=None):
+        return {
+            "ts": now_ms,
+            "bids": {"100": "2", "99": "3"},
+            "asks": {"101": "2", "102": "3"},
+        }
+
+    client._get = fake_get
+    book = await client.get_futures_orderbook("B-BTC_USDT")
+    assert book["pair"] == "B-BTC_USDT"
+    assert len(client._orderbook_cache) == 1
+
+    # A large set of still-fresh snapshots is also capped deterministically.
+    client._orderbook_cache = {
+        f"B-FRESH{index}_USDT:10": (now_mono - 0.5, {"timestamp": now_ms})
+        for index in range(1200)
+    }
+    client._prune_orderbook_cache(now_mono)
+    assert len(client._orderbook_cache) == 1000
