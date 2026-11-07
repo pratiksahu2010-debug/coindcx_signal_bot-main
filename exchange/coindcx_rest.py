@@ -483,6 +483,10 @@ class CoinDCXRest:
             result = []
             for bucket, bars in sorted(buckets.items()):
                 bars.sort(key=lambda x: x["time"])
+                # A synthesized candle is valid only when its entire 15m
+                # interval is contained in the caller's requested window.
+                if bucket < start_ms or bucket + width > end_ms:
+                    continue
                 if len(bars) != 3 or [x["time"] for x in bars] != [bucket, bucket + 300000, bucket + 600000]:
                     continue
                 result.append({
