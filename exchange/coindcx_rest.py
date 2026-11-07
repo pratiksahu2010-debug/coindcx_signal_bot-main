@@ -543,6 +543,11 @@ class CoinDCXRest:
                     continue
                 if candle["high"] < max(candle["open"], candle["close"], candle["low"]) or candle["low"] > min(candle["open"], candle["close"], candle["high"]):
                     continue
+                # The exchange may return candles just outside the requested
+                # window (for example, inclusive end boundaries). Never let
+                # those rows leak into historical warmup or backfill results.
+                if ts < start_ms or ts >= end_ms:
+                    continue
                 if ts % duration_ms == 0 and ts + duration_ms + max(0, int(settings.candle_close_grace_seconds))*1000 <= now_ms:
                     normalized.append(candle)
             except (TypeError, ValueError, OverflowError):
