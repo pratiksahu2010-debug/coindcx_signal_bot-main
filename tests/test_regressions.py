@@ -886,3 +886,34 @@ def test_static_universe_fails_closed_when_turnover_data_is_missing(monkeypatch)
         assert manager.whitelist_diagnostics["BTCUSDT"]["status"] == "LIQUIDITY_UNKNOWN"
 
     asyncio.run(run())
+
+
+
+def test_intrabar_momentum_rvol_uses_live_candle_volume(monkeypatch):
+    from core.engine import SignalEngine
+    from config import settings
+
+    class CandleStub:
+        def get_arrays(self, pair, timeframe):
+            return {
+                "close": np.full(30, 100.0),
+                "volume": np.full(30, 10.0),
+            }
+
+    class SymbolStub:
+        def display_name(self, pair):
+            return "BTCUSDT"
+
+    engine = SignalEngine.__new__(SignalEngine)
+    engine.candles = CandleStub()
+    engine.symbols = SymbolStub()
+    engine.watchlists = {"momentum": []}
+    monkeypatch.setattr(settings, "candle_primary_tf", "5m")
+
+    engine.on_intrabar_candle("B-BTC_USDT", "5m", {
+        "open": 100.0, "high": 102.0, "low": 99.0,
+        "close": 101.0, "volume": 100.0,
+    })
+
+    assert len(engine.watchlists["momentum"]) == 1
+    assert engine.watchlists["momentum"][0]["indicators"]["live_rvol"] == 10.0
