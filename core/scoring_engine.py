@@ -378,15 +378,15 @@ class ScoringEngine:
         raw_location = indicators.get("close_location", 0.5)
         location = float(0.5 if raw_location is None else raw_location)
         aligned_location = location if is_long else 1.0 - location
-        location_points = 1.0 if aligned_location >= 0.80 else (0.75 if aligned_location >= 0.65 else 0.0)
-        components.append(ScoreComponent("ORB Close Location", location_points, 1.0,
+        location_points = 1.25 if aligned_location >= 0.80 else (0.95 if aligned_location >= 0.65 else 0.0)
+        components.append(ScoreComponent("ORB Close Location", location_points, 1.25,
             aligned_location, direction, f"Directional close location {aligned_location:.2f}",
             aligned_location >= 0.62))
 
         raw_extension = indicators.get("orb_breakout_extension_atr")
         extension = float(99.0 if raw_extension is None else raw_extension)
-        extension_points = 1.75 if extension <= 0.35 else (1.35 if extension <= 0.55 else 0.90)
-        components.append(ScoreComponent("ORB Entry Distance", extension_points, 1.75,
+        extension_points = 2.0 if extension <= 0.35 else (1.50 if extension <= 0.55 else 1.0)
+        components.append(ScoreComponent("ORB Entry Distance", extension_points, 2.0,
             extension, direction, f"Breakout extension {extension:.2f} ATR", extension <= 0.80))
 
         width = float(indicators.get("orb_range_width_atr") or 0.0)
@@ -408,15 +408,15 @@ class ScoringEngine:
 
         trend_ok = bool(indicators.get("orb_trend_confirmed"))
         adx_rising = bool(indicators.get("orb_adx_rising"))
-        trend_points = 1.0 if trend_ok and adx_rising else (0.75 if trend_ok else 0.0)
-        components.append(ScoreComponent("ADX + DI Context", trend_points, 1.0,
+        trend_points = 0.75 if trend_ok and adx_rising else (0.55 if trend_ok else 0.0)
+        components.append(ScoreComponent("ADX + DI Context", trend_points, 0.75,
             {"adx": indicators.get("adx"), "di_aligned": indicators.get("orb_di_aligned"),
              "adx_rising": adx_rising}, direction,
             ("ADX strong and DI aligned" + ("; ADX rising" if adx_rising else ""))
             if trend_ok else "ADX/DI confirmation unavailable or not aligned", trend_ok))
 
         wick_ok = bool(indicators.get("orb_wick_quality"))
-        components.append(ScoreComponent("Opposing Wick Quality", 1.0 if wick_ok else 0.0, 1.0,
+        components.append(ScoreComponent("Opposing Wick Quality", 0.75 if wick_ok else 0.0, 0.75,
             wick_ok, direction, "Opposing wick controlled" if wick_ok else "Opposing wick too large",
             wick_ok))
 

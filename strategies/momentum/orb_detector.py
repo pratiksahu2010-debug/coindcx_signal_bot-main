@@ -46,9 +46,6 @@ def evaluate(
         if any(_finite(value) is None for values in (op, hi, lo, cl) for value in values):
             return {"state": "INVALID_DATA", "session": session_name}
         stamps = [int(value) for value in ts]
-        if any(stamps[i] >= stamps[i + 1] for i in range(len(stamps) - 1)):
-            return {"state": "INVALID_DATA", "session": session_name}
-
         now = _local(stamps[-1], tz)
         range_start = datetime.combine(now.date(), spec["open"], tzinfo=tz)
         range_end = range_start + timedelta(minutes=15)
@@ -64,6 +61,8 @@ def evaluate(
         }
         if now < range_end:
             return _result("BUILDING_RANGE", meta)
+        if any(stamps[i] >= stamps[i + 1] for i in range(len(stamps) - 1)):
+            return {"state": "INVALID_DATA", "session": session_name}
         if now >= session_end:
             return _result("SESSION_CLOSED", meta)
 
