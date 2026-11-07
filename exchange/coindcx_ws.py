@@ -164,12 +164,18 @@ class CoinDCXFuturesStream:
                     "close": float(row.get("close", row.get("c"))),
                     "volume": float(row.get("volume", row.get("v", 0)) or 0),
                 }
-                duration = str(row.get("duration") or row.get("i") or "")
+                duration = str(row.get("duration") or row.get("i") or "").strip()
+                # Uppercase M denotes a calendar month on exchange feeds, not
+                # the lowercase m minute unit supported by parse_interval.
+                # Never normalize a monthly candle into a one-minute candle.
+                if duration.endswith("M"):
+                    continue
                 interval = duration if duration else None
-                if interval not in ("1m", "5m", "15m", "30m", "1h", "4h", "8h", "1d", "3d", "1w", "1M"):
+                if interval not in ("1m", "5m", "15m", "30m", "1h", "4h", "8h", "1d", "3d", "1w"):
                     channel = str(row.get("channel") or outer_channel or "")
-                    match = re.search(r"_(\d+[mhdw])-futures", channel, re.IGNORECASE)
-                    interval = match.group(1).lower() if match else None
+                    # Keep the unit case-sensitive: M (month) is not m (minute).
+                    match = re.search(r"_(\d+[mhdw])-futures", channel)
+                    interval = match.group(1) if match else None
                 if interval:
                     interval = interval.strip().lower()
                     # WebSocket candles are forming-candle context only. Reject
