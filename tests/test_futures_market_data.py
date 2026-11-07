@@ -136,6 +136,28 @@ def test_futures_ws_prices_ignore_out_of_order_market_updates(monkeypatch):
     assert client._ws_prices["BTCUSDT"] == (65000.0, now_ms - 1_000)
 
 
+def test_futures_ws_price_cache_expires_stale_entries_and_enforces_size_bound(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    client._ws_prices["STALEUSDT"] = (1.0, now_ms - 6_000)
+    for index in range(2_002):
+        client._ws_prices[f"M{index}USDT"] = (
+            float(index + 1), now_ms - (2_002 - index)
+        )
+
+    client._prune_ws_price_cache(now_ms, force=True)
+
+    assert "STALEUSDT" not in client._ws_prices
+    assert len(client._ws_prices) == client.MAX_WS_PRICE_CACHE_ENTRIES
+    # The two oldest still-fresh entries are evicted; newest quotes survive.
+    assert "M0USDT" not in client._ws_prices
+    assert "M1USDT" not in client._ws_prices
+    assert "M2USDT" in client._ws_prices
+    assert "M2001USDT" in client._ws_prices
+
+
 def test_futures_ws_price_parser_uses_last_trade_not_mark_price(monkeypatch):
     client = CoinDCXRest()
     now_ms = 1_800_000_000_000
