@@ -1,14 +1,69 @@
 """Health, status, ping, metrics endpoints — lightweight for keep-alive."""
 from typing import Any, Dict
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from config import settings
-from utils.time_utils import utc_iso
+from utils.time_utils import utc_iso, parse_interval
 from utils.memory_monitor import check_memory
 
 router = APIRouter()
+
+
+def _scan_freshness(state: dict, request: Request) -> tuple[dict, bool]:
+    """Report per-engine scan freshness and detect a stalled live scan loop."""
+    if not state.get("scan_task_expected"):
+        return {}, False
+
+    interval_seconds = parse_interval(settings.candle_primary_tf).total_seconds()
+    stale_after = max(
+        300.0,
+        interval_seconds * 2
+        + max(0, settings.candle_close_grace_seconds)
+        + settings.max_signal_age_seconds,
+    )
+    now = datetime.now(timezone.utc)
+    startup = getattr(request.app.state, "start_time", None)
+    if startup is not None and startup.tzinfo is None:
+        startup = startup.replace(tzinfo=timezone.utc)
+    startup_age = max(0.0, (now - startup).total_seconds()) if startup else 0.0
+
+    freshness = {}
+    any_stale = False
+    for engine, enabled in (
+        ("normal", settings.enable_normal_engine),
+        ("momentum", settings.enable_momentum_engine),
+    ):
+        if not enabled:
+            continue
+        last_scan = state.get(f"last_scan_{engine}")
+        age = None
+        if last_scan:
+            try:
+                scanned_at = datetime.fromisoformat(str(last_scan).replace("Z", "+00:00"))
+                if scanned_at.tzinfo is None:
+                    scanned_at = scanned_at.replace(tzinfo=timezone.utc)
+                age = (now - scanned_at).total_seconds()
+            except (TypeError, ValueError, OverflowError):
+                age = None
+
+        if last_scan:
+            stale = age is None or age < -60.0 or age > stale_after
+            status = "stale" if stale else "fresh"
+        else:
+            stale = startup_age > stale_after
+            status = "stale" if stale else "waiting"
+
+        any_stale = any_stale or stale
+        freshness[engine] = {
+            "status": status,
+            "last_scan": last_scan,
+            "age_seconds": round(max(0.0, age), 1) if age is not None else None,
+            "stale_after_seconds": round(stale_after, 1),
+        }
+    return freshness, any_stale
 
 
 @router.get("/")
@@ -37,6 +92,8 @@ async def health(request: Request):
             status_code=503,
             content={"ok": False, "status": "degraded", "reasons": ["startup_incomplete"]},
         )
+
+    scan_freshness, scan_cycle_stale = _scan_freshness(state or {}, request)
 
     if state is not None:
         database = state.get("database")
@@ -72,6 +129,7 @@ async def health(request: Request):
             or scan_task_failed
             or retest_task_failed
             or delivery_task_failed
+            or scan_cycle_stale
         ):
             reasons = []
             if database == "unavailable" or database_paused:
@@ -88,6 +146,8 @@ async def health(request: Request):
                 reasons.append("pending_retest_monitor_failed")
             if delivery_task_failed:
                 reasons.append("telegram_delivery_worker_failed")
+            if scan_cycle_stale:
+                reasons.append("scan_cycle_stale")
             return JSONResponse(
                 status_code=503,
                 content={
@@ -105,6 +165,7 @@ async def health(request: Request):
                     "retest_task_error": state.get("retest_task_error"),
                     "telegram_delivery_task_status": state.get("telegram_delivery_task_status", "unknown"),
                     "telegram_delivery_task_error": state.get("telegram_delivery_task_error"),
+                    "scan_freshness": scan_freshness,
                     "reasons": reasons,
                 },
             )
@@ -112,6 +173,7 @@ async def health(request: Request):
         "ok": True,
         "status": "healthy",
         "telegram_delivery_ready": telegram_delivery_ready,
+        "scan_freshness": scan_freshness,
     }
 
 
@@ -154,6 +216,10 @@ async def status(request: Request) -> Dict[str, Any]:
         "normal_engine": app_state.get("normal_engine", "unknown"),
         "momentum_engine": app_state.get("momentum_engine", "unknown"),
         "last_scan": app_state.get("last_scan"),
+        "last_scan_normal": app_state.get("last_scan_normal"),
+        "last_scan_momentum": app_state.get("last_scan_momentum"),
+        "last_scan_duration_ms_normal": app_state.get("last_scan_duration_ms_normal"),
+        "last_scan_duration_ms_momentum": app_state.get("last_scan_duration_ms_momentum"),
         "scan_task_expected": app_state.get("scan_task_expected", False),
         "scan_task_status": app_state.get("scan_task_status", "unknown"),
         "scan_task_error": app_state.get("scan_task_error"),
