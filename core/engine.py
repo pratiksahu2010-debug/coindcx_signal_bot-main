@@ -1601,8 +1601,11 @@ class SignalEngine:
                 try:
                     from database.repositories import update_signal_record, record_signal_outcome
                     await update_signal_record(current, status)
-                    if 1 in hits:
-                        await record_signal_outcome(current, float(t1), "TP1")
+                    highest_target = max(hits)
+                    target_price = (t1, t2, t3)[highest_target - 1]
+                    await record_signal_outcome(
+                        current, float(target_price), f"TP{highest_target}"
+                    )
                 except Exception as exc:
                     logger.error(f"Persist TP outcome failed for {pair}: {exc}")
 

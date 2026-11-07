@@ -255,12 +255,27 @@ async def record_signal_outcome(signal: dict, latest_price: float, outcome: str 
     factory = database_db.SessionLocal
     if factory is None:
         return False
-    entry = float(signal.get("live_price") or signal.get("price") or 0)
-    if entry <= 0 or latest_price <= 0:
+    try:
+        entry = float(signal.get("live_price") or signal.get("price") or 0)
+        latest_price = float(latest_price)
+    except (TypeError, ValueError, OverflowError):
         return False
     direction = signal.get("direction")
+    if (
+        direction not in ("LONG", "SHORT")
+        or not all(__import__("math").isfinite(value) and value > 0 for value in (entry, latest_price))
+    ):
+        return False
+    pair, engine = signal.get("pair"), signal.get("engine")
+    candle_key = signal.get("candle_time_ms") or signal.get("timestamp")
+    if not pair or not engine or candle_key is None:
+        return False
+    allowed_outcomes = {"ACTIVE", "TP1", "TP2", "TP3", "STOP", "FAILED_BREAKOUT"}
+    outcome = str(outcome).upper()
+    if outcome not in allowed_outcomes:
+        return False
     move = ((latest_price / entry) - 1.0) * 100.0 * (1 if direction == "LONG" else -1)
-    key = f"{signal.get('pair')}:{signal.get('engine')}:{direction}:{signal.get('candle_time_ms', signal.get('timestamp', ''))}"
+    key = f"{pair}:{engine}:{direction}:{candle_key}"
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     async with factory() as session:
         try:
@@ -277,7 +292,13 @@ async def record_signal_outcome(signal: dict, latest_price: float, outcome: str 
                 row.latest_price = latest_price
                 row.mfe_pct = max(row.mfe_pct, move)
                 row.mae_pct = min(row.mae_pct, move)
-                if row.outcome == "ACTIVE" or outcome in ("STOP", "FAILED_BREAKOUT"):
+                # Preserve the furthest target milestone; terminal stop outcomes
+                # override partial targets, while later ACTIVE samples never downgrade it.
+                priority = {
+                    "ACTIVE": 0, "TP1": 1, "TP2": 2, "TP3": 3,
+                    "STOP": 4, "FAILED_BREAKOUT": 4,
+                }
+                if priority[outcome] >= priority.get(row.outcome, 0):
                     row.outcome = outcome
                 row.payload = json.dumps(signal, default=str)
                 row.updated_at = now
@@ -315,13 +336,21 @@ async def signal_performance_report(days: int = 30) -> dict:
             except (TypeError, ValueError):
                 pass
         failed_breakouts = sum(x.outcome == "FAILED_BREAKOUT" for x in items)
-        report[name] = {"count": len(items), "tp1_rate": sum(x.outcome == "TP1" for x in items) / len(items),
+        target_1 = {"TP1", "TP2", "TP3"}
+        target_2 = {"TP2", "TP3"}
+        target_3 = {"TP3"}
+        report[name] = {
+            "count": len(items),
+            "tp1_rate": sum(x.outcome in target_1 for x in items) / len(items),
+            "tp2_rate": sum(x.outcome in target_2 for x in items) / len(items),
+            "tp3_rate": sum(x.outcome in target_3 for x in items) / len(items),
             "stop_rate": sum(x.outcome in ("STOP", "FAILED_BREAKOUT") for x in items) / len(items),
             "false_breakout_rate": failed_breakouts / len(items),
             "avg_mfe_pct": sum(x.mfe_pct for x in items) / len(items),
             "avg_mae_pct": sum(x.mae_pct for x in items) / len(items),
             "avg_signal_age_seconds": sum(ages) / len(ages) if ages else None,
-            "active": sum(x.outcome == "ACTIVE" for x in items)}
+            "active": sum(x.outcome == "ACTIVE" for x in items),
+        }
     return {"available": True, "groups": report}
 
 
