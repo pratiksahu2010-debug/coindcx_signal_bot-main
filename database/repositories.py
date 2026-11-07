@@ -330,20 +330,30 @@ async def signal_performance_report(days: int = 30) -> dict:
     report = {}
     for name, items in groups.items():
         ages = []
+        payloads = {}
+        import json
         for item in items:
             try:
-                ages.append(float((__import__("json").loads(item.payload or "{}")).get("signal_age_seconds", 0)))
+                payload = json.loads(item.payload or "{}")
+                payloads[item.id] = payload if isinstance(payload, dict) else {}
+                ages.append(float(payloads[item.id].get("signal_age_seconds", 0)))
             except (TypeError, ValueError):
-                pass
+                payloads[item.id] = {}
         failed_breakouts = sum(x.outcome == "FAILED_BREAKOUT" for x in items)
-        target_1 = {"TP1", "TP2", "TP3"}
-        target_2 = {"TP2", "TP3"}
-        target_3 = {"TP3"}
+        target_rank = {"TP1": 1, "TP2": 2, "TP3": 3}
+        def reached(item, level):
+            payload = payloads.get(item.id, {})
+            # Persisted target flags preserve partial wins even if the trade
+            # later exits at its stop; older rows fall back to final outcome.
+            return (
+                target_rank.get(item.outcome, 0) >= level
+                or any(payload.get(f"tp{n}_hit") is True for n in range(level, 4))
+            )
         report[name] = {
             "count": len(items),
-            "tp1_rate": sum(x.outcome in target_1 for x in items) / len(items),
-            "tp2_rate": sum(x.outcome in target_2 for x in items) / len(items),
-            "tp3_rate": sum(x.outcome in target_3 for x in items) / len(items),
+            "tp1_rate": sum(reached(x, 1) for x in items) / len(items),
+            "tp2_rate": sum(reached(x, 2) for x in items) / len(items),
+            "tp3_rate": sum(reached(x, 3) for x in items) / len(items),
             "stop_rate": sum(x.outcome in ("STOP", "FAILED_BREAKOUT") for x in items) / len(items),
             "false_breakout_rate": failed_breakouts / len(items),
             "avg_mfe_pct": sum(x.mfe_pct for x in items) / len(items),
