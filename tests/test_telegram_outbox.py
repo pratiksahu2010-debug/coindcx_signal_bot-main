@@ -226,6 +226,9 @@ def test_outbox_stale_worker_cannot_complete_or_retry_newer_attempt(tmp_path, mo
             assert not await retry_signal_delivery(
                 first["delivery_key"], "late timeout from old worker", first["attempts"]
             )
+            assert not await expire_signal_delivery(
+                first["delivery_key"], first["attempts"]
+            )
             async with database_db.SessionLocal() as session:
                 row = await session.get(SignalDeliveryRecord, first["delivery_key"])
                 assert row.status == "sending"

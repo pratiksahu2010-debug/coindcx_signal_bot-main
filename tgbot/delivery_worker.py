@@ -51,7 +51,7 @@ class TelegramDeliveryWorker:
         for item in items:
             key = item.get("delivery_key", "")
             if self._expired(item):
-                await expire_signal_delivery(key)
+                await expire_signal_delivery(key, int(item.get("attempts", 1)))
                 self.expired += 1
                 continue
             try:

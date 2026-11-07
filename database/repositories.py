@@ -686,8 +686,10 @@ async def signal_delivery_queue_stats() -> dict:
         return {"available": False, "counts": {}, "total": 0, "oldest_pending_age_seconds": None}
 
 
-async def expire_signal_delivery(delivery_key: str) -> bool:
+async def expire_signal_delivery(delivery_key: str, attempts: int) -> bool:
+    """Expire an item only while the supplied worker still owns its lease."""
     from datetime import datetime, timezone
+    from sqlalchemy import update
     from database import db as database_db
     from database.models import SignalDeliveryRecord
     factory = database_db.SessionLocal
@@ -695,14 +697,21 @@ async def expire_signal_delivery(delivery_key: str) -> bool:
         return False
     async with factory() as session:
         try:
-            row = await session.get(SignalDeliveryRecord, delivery_key)
-            if row is None:
-                return False
-            row.status = "expired"
-            row.last_error = "signal entry window expired before Telegram delivery"
-            row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            result = await session.execute(
+                update(SignalDeliveryRecord)
+                .where(
+                    SignalDeliveryRecord.delivery_key == delivery_key,
+                    SignalDeliveryRecord.status == "sending",
+                    SignalDeliveryRecord.attempts == max(1, int(attempts)),
+                )
+                .values(
+                    status="expired",
+                    last_error="signal entry window expired before Telegram delivery",
+                    updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+            )
             await session.commit()
-            return True
+            return bool(result.rowcount)
         except Exception as exc:
             await session.rollback()
             logger.error("Telegram outbox expiry update failed: %s", exc)
