@@ -529,8 +529,10 @@ async def claim_due_signal_deliveries(limit: int = 20, lease_seconds: int = 90) 
             return []
 
 
-async def complete_signal_delivery(delivery_key: str) -> bool:
+async def complete_signal_delivery(delivery_key: str, attempts: int | None = None) -> bool:
+    """Mark delivery complete only if this worker still owns the sending attempt."""
     from datetime import datetime, timezone
+    from sqlalchemy import update
     from database import db as database_db
     from database.models import SignalDeliveryRecord
     factory = database_db.SessionLocal
@@ -538,41 +540,62 @@ async def complete_signal_delivery(delivery_key: str) -> bool:
         return False
     async with factory() as session:
         try:
-            row = await session.get(SignalDeliveryRecord, delivery_key)
-            if row is None:
-                return False
-            row.status = "delivered"
-            row.last_error = ""
-            row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            conditions = [
+                SignalDeliveryRecord.delivery_key == delivery_key,
+                SignalDeliveryRecord.status == "sending",
+            ]
+            if attempts is not None:
+                conditions.append(SignalDeliveryRecord.attempts == int(attempts))
+            result = await session.execute(
+                update(SignalDeliveryRecord)
+                .where(*conditions)
+                .values(
+                    status="delivered",
+                    last_error="",
+                    updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+            )
             await session.commit()
-            return True
+            return bool(result.rowcount)
         except Exception as exc:
             await session.rollback()
             logger.error("Telegram outbox completion failed: %s", exc)
             return False
 
 
-async def retry_signal_delivery(delivery_key: str, error: str, attempts: int, max_attempts: int = 8) -> bool:
+async def retry_signal_delivery(
+    delivery_key: str, error: str, attempts: int, max_attempts: int = 8
+) -> bool:
+    """Schedule retry only while the supplied worker attempt still owns the row."""
     from datetime import datetime, timedelta, timezone
+    from sqlalchemy import update
     from database import db as database_db
     from database.models import SignalDeliveryRecord
     factory = database_db.SessionLocal
     if factory is None:
         return False
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    terminal = int(attempts) >= max(1, int(max_attempts))
-    delay = min(60, 2 ** min(max(1, int(attempts)), 6))
+    attempt_number = max(1, int(attempts))
+    terminal = attempt_number >= max(1, int(max_attempts))
+    delay = min(60, 2 ** min(attempt_number, 6))
     async with factory() as session:
         try:
-            row = await session.get(SignalDeliveryRecord, delivery_key)
-            if row is None:
-                return False
-            row.status = "failed" if terminal else "retry"
-            row.last_error = str(error)[:2000]
-            row.next_attempt_at = now + timedelta(seconds=delay)
-            row.updated_at = now
+            result = await session.execute(
+                update(SignalDeliveryRecord)
+                .where(
+                    SignalDeliveryRecord.delivery_key == delivery_key,
+                    SignalDeliveryRecord.status == "sending",
+                    SignalDeliveryRecord.attempts == attempt_number,
+                )
+                .values(
+                    status="failed" if terminal else "retry",
+                    last_error=str(error)[:2000],
+                    next_attempt_at=now + timedelta(seconds=delay),
+                    updated_at=now,
+                )
+            )
             await session.commit()
-            return True
+            return bool(result.rowcount)
         except Exception as exc:
             await session.rollback()
             logger.error("Telegram outbox retry update failed: %s", exc)

@@ -40,7 +40,13 @@ class TelegramDeliveryWorker:
             expire_stale_signal_deliveries,
         )
         await expire_stale_signal_deliveries()
-        items = await claim_due_signal_deliveries(self.batch_size)
+        # A whole batch is leased before sequential delivery. Size the lease to
+        # the worst-case Telegram transport budget so later items are not
+        # reclaimed while still waiting their turn in this batch.
+        lease_seconds = max(90, self.batch_size * 30 + 30)
+        items = await claim_due_signal_deliveries(
+            self.batch_size, lease_seconds=lease_seconds
+        )
         sent = 0
         for item in items:
             key = item.get("delivery_key", "")
@@ -52,7 +58,7 @@ class TelegramDeliveryWorker:
                 await self.telegram.send_signal_to_chat(
                     item["signal"], int(item["chat_id"])
                 )
-                if await complete_signal_delivery(key):
+                if await complete_signal_delivery(key, int(item.get("attempts", 1))):
                     sent += 1
                     self.delivered += 1
                     try:

@@ -188,3 +188,52 @@ def test_outbox_queue_stats_reports_durable_status_counts_and_oldest_age(tmp_pat
             await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_outbox_stale_worker_cannot_complete_or_retry_newer_attempt(tmp_path, monkeypatch):
+    async def run():
+        from sqlalchemy import select
+        from database.models import SignalDeliveryRecord
+        engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'outbox_attempt_fence.db'}")
+        old_engine, old_factory = database_db.engine, database_db.SessionLocal
+        database_db.engine = engine
+        database_db.SessionLocal = async_sessionmaker(
+            engine, class_=AsyncSession, expire_on_commit=False
+        )
+        monkeypatch.setattr("config.settings.max_signal_age_seconds", 120)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            signal = {
+                "pair": "B-SOL_USDT", "engine": "normal", "direction": "LONG",
+                "candle_time_ms": 1_800_000_000_001, "signal_age_seconds": 1,
+                "price": 150,
+            }
+            assert await enqueue_signal_deliveries(signal, [777]) == 1
+            first = (await claim_due_signal_deliveries(limit=1))[0]
+            assert first["attempts"] == 1
+
+            # Simulate lease expiry and recovery by a newer worker.
+            async with database_db.SessionLocal() as session:
+                row = await session.get(SignalDeliveryRecord, first["delivery_key"])
+                row.updated_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5)
+                await session.commit()
+            second = (await claim_due_signal_deliveries(limit=1, lease_seconds=30))[0]
+            assert second["attempts"] == 2
+
+            # The old worker must not overwrite the new worker's active lease.
+            assert not await complete_signal_delivery(first["delivery_key"], first["attempts"])
+            assert not await retry_signal_delivery(
+                first["delivery_key"], "late timeout from old worker", first["attempts"]
+            )
+            async with database_db.SessionLocal() as session:
+                row = await session.get(SignalDeliveryRecord, first["delivery_key"])
+                assert row.status == "sending"
+                assert row.attempts == 2
+
+            assert await complete_signal_delivery(second["delivery_key"], second["attempts"])
+        finally:
+            database_db.engine, database_db.SessionLocal = old_engine, old_factory
+            await engine.dispose()
+
+    asyncio.run(run())
