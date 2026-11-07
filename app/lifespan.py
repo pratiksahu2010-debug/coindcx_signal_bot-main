@@ -31,9 +31,14 @@ def _watch_background_task(task: asyncio.Task, state: dict, name: str) -> None:
             error = f"{type(exc).__name__}: {exc}"[:500] if exc is not None else "task_exited"
         state[f"{name}_status"] = status
         state[f"{name}_error"] = error
-        logger.error(
-            f"BACKGROUND_TASK_EXITED task={name} status={status} error={error}"
-        )
+        if done.cancelled() and state.get("shutting_down"):
+            logger.info(
+                f"BACKGROUND_TASK_STOPPED task={name} reason=application_shutdown"
+            )
+        else:
+            logger.error(
+                f"BACKGROUND_TASK_EXITED task={name} status={status} error={error}"
+            )
 
     task.add_done_callback(_completed)
 
@@ -258,6 +263,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     logger.info("Shutting down...")
+    # Mark expected task cancellation before cancelling supervised workers so
+    # deployment restarts do not emit misleading ERROR-level crash messages.
+    app.state.bot_state["shutting_down"] = True
     delivery_worker.stop()
     for task in (scan_task, retest_task, telegram_delivery_task):
         if task is not None:
