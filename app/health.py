@@ -1,9 +1,9 @@
 """Health, status, ping, metrics endpoints — lightweight for keep-alive."""
-from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
+
 from config import settings
 from utils.time_utils import utc_iso
 from utils.memory_monitor import check_memory
@@ -24,8 +24,20 @@ async def root() -> Dict[str, Any]:
 
 @router.get("/health")
 async def health(request: Request):
-    """Report degraded startup state so Render does not mistake a paused bot for healthy."""
+    """Readiness probe; /ping remains process liveness only."""
     state = getattr(request.app.state, "bot_state", None)
+    telegram = getattr(request.app.state, "telegram", None)
+    telegram_delivery_ready = bool(
+        getattr(telegram, "bot", None) and getattr(telegram, "admin_ids", [])
+    )
+
+    # In production, a process that has not completed lifespan startup is not ready.
+    if state is None and settings.is_production:
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "status": "degraded", "reasons": ["startup_incomplete"]},
+        )
+
     if state is not None:
         database = state.get("database")
         database_paused = (
@@ -38,7 +50,14 @@ async def health(request: Request):
         momentum_symbols_missing = (
             settings.enable_momentum_engine and int(state.get("valid_symbols_momentum") or 0) <= 0
         )
-        if database == "unavailable" or database_paused or normal_symbols_missing or momentum_symbols_missing:
+        telegram_unavailable = settings.is_production and not telegram_delivery_ready
+        if (
+            database == "unavailable"
+            or database_paused
+            or normal_symbols_missing
+            or momentum_symbols_missing
+            or telegram_unavailable
+        ):
             reasons = []
             if database == "unavailable" or database_paused:
                 reasons.append("database_unavailable")
@@ -46,18 +65,27 @@ async def health(request: Request):
                 reasons.append("normal_universe_empty")
             if momentum_symbols_missing:
                 reasons.append("momentum_universe_empty")
+            if telegram_unavailable:
+                reasons.append("telegram_delivery_unavailable")
             return JSONResponse(
                 status_code=503,
                 content={
-                    "ok": False, "status": "degraded", "database": database,
+                    "ok": False,
+                    "status": "degraded",
+                    "database": database,
                     "normal_engine": state.get("normal_engine"),
                     "momentum_engine": state.get("momentum_engine"),
                     "valid_symbols_normal": state.get("valid_symbols_normal", 0),
                     "valid_symbols_momentum": state.get("valid_symbols_momentum", 0),
+                    "telegram_delivery_ready": telegram_delivery_ready,
                     "reasons": reasons,
                 },
             )
-    return {"ok": True, "status": "healthy"}
+    return {
+        "ok": True,
+        "status": "healthy",
+        "telegram_delivery_ready": telegram_delivery_ready,
+    }
 
 
 @router.api_route("/ping", methods=["GET", "HEAD"], response_class=Response)
@@ -83,6 +111,9 @@ async def status(request: Request) -> Dict[str, Any]:
     telegram = getattr(request.app.state, "telegram", None)
     telegram_polling = bool(getattr(telegram, "polling_active", False))
     telegram_status = "polling" if telegram_polling else ("send_only" if getattr(telegram, "bot", None) else "disabled")
+    telegram_delivery_ready = bool(
+        getattr(telegram, "bot", None) and getattr(telegram, "admin_ids", [])
+    )
     delivery_worker = getattr(request.app.state, "telegram_delivery_worker", None)
     return {
         "ok": True,
@@ -106,6 +137,8 @@ async def status(request: Request) -> Dict[str, Any]:
         "database": app_state.get("database", "unknown"),
         "telegram": telegram_status,
         "telegram_polling": telegram_polling,
+        "telegram_delivery_ready": telegram_delivery_ready,
+        "telegram_admin_count": len(getattr(telegram, "admin_ids", []) or []),
         "eligible_symbols": app_state.get("eligible_symbols", 0),
         "skipped_symbols": app_state.get("skipped_symbols", 0),
         "liquidity_filtered_symbols": app_state.get("liquidity_filtered_symbols", 0),

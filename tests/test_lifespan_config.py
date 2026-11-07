@@ -19,3 +19,15 @@ def test_runtime_config_rejects_nonpositive_primary_interval(monkeypatch):
     monkeypatch.setattr(settings, "candle_primary_tf", "0m")
     with pytest.raises(ValueError, match="Interval must be positive"):
         validate_runtime_config()
+
+
+def test_runtime_config_rejects_nonpositive_orb_rvol(monkeypatch):
+    monkeypatch.setattr(settings, "orb_min_rvol", 0)
+    with pytest.raises(ValueError, match="ORB_MIN_RVOL"):
+        validate_runtime_config()
+
+
+def test_runtime_config_rejects_invalid_log_level(monkeypatch):
+    monkeypatch.setattr(settings, "log_level", "NOT_A_LEVEL")
+    with pytest.raises(ValueError, match="LOG_LEVEL"):
+        validate_runtime_config()
