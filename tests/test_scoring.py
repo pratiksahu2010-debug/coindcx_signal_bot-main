@@ -319,3 +319,69 @@ def test_normal_reversal_strategy_classifier_can_reach_reversal_branch():
         "resistance": 105.0, "support": 98.0, "close_location": 0.70,
     }
     assert detect_strategy(indicators, "LONG") == "REVERSAL"
+
+
+
+def test_all_scoring_modes_fail_closed_on_malformed_and_nonfinite_indicators():
+    import math
+
+    engine = ScoringEngine()
+    malformed = {
+        "ema9": "not-a-number",
+        "ema21": float("inf"),
+        "close": float("nan"),
+        "vwap": "bad",
+        "adx": 140,
+        "rsi": -1,
+        "rsi_prev": float("-inf"),
+        "rvol": "unknown",
+        "atr_pct": float("nan"),
+        "body_ratio": 1.5,
+        "atr_expansion": float("inf"),
+        "close_location": -0.2,
+        "orb_breakout_extension_atr": float("nan"),
+        "orb_range_width_atr": -1,
+        "roc": "broken",
+        "squeeze_release": "false",
+        "bw_expand": "false",
+        "ema_aligned": "false",
+        "macd_accel": "false",
+        "macd_direction_ok": "false",
+        "rsi_accel": "false",
+        "structure_break": "false",
+        "roc_direction_ok": "false",
+        "confirm_15m": "false",
+        "structure_direction_ok": "false",
+    }
+    results = (
+        engine.score_normal(malformed, "LONG"),
+        engine.score_momentum(malformed, "LONG"),
+        engine.score_momentum_explosion(malformed, "LONG"),
+        engine.score_orb(malformed, "LONG"),
+    )
+    for result in results:
+        assert math.isfinite(result.total)
+        assert 0.0 <= result.total <= 10.0
+        assert all(math.isfinite(component.points) for component in result.components)
+
+    # Malformed truthy strings must never count as confirmation.
+    normal = engine.score_normal(malformed, "LONG")
+    assert next(c for c in normal.components if c.name == "15m Confirm").points == 0.0
+    assert next(c for c in normal.components if c.name == "Structure").points == 0.0
+    momentum = engine.score_momentum(malformed, "LONG")
+    assert next(c for c in momentum.components if c.name == "Squeeze Release").points == 0.0
+    assert next(c for c in momentum.components if c.name == "EMA Align").points == 0.0
+
+
+def test_scoring_modes_reject_unknown_direction():
+    import pytest
+
+    engine = ScoringEngine()
+    for method in (
+        engine.score_normal,
+        engine.score_momentum,
+        engine.score_momentum_explosion,
+        engine.score_orb,
+    ):
+        with pytest.raises(ValueError, match="direction must be LONG or SHORT"):
+            method({}, "BUY")
