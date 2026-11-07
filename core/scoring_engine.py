@@ -265,8 +265,6 @@ class ScoringEngine:
         return ScoreResult(total=round(total, 2), components=comps, direction=direction)
 
     def score_momentum_explosion(self, indicators: Dict[str, Any], direction: str) -> ScoreResult:
-        _validate_direction(direction)
-        indicators = _validated_indicators(indicators)
         """Score an already-qualified early ignition without demanding lagging confirmation.
 
         The detector has already enforced minimum ATR expansion, RVOL, candle body,
@@ -274,6 +272,8 @@ class ScoringEngine:
         conditions receive the 7-point baseline; additional structure/squeeze/
         bandwidth/trend evidence improves the grade rather than vetoing ignition.
         """
+        _validate_direction(direction)
+        indicators = _validated_indicators(indicators)
         is_long = direction == "LONG"
         components: List[ScoreComponent] = []
 
@@ -351,9 +351,9 @@ class ScoringEngine:
         return ScoreResult(total=round(total, 2), components=components, direction=direction)
 
     def score_orb(self, indicators: Dict[str, Any], direction: str) -> ScoreResult:
+        """Score ORB quality from its own range, participation and entry geometry."""
         _validate_direction(direction)
         indicators = _validated_indicators(indicators)
-        """Score ORB quality from its own range, participation and entry geometry."""
         is_long = direction == "LONG"
         components: List[ScoreComponent] = []
 
