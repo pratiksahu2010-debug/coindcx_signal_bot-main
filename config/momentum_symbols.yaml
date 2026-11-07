@@ -1,4 +1,4 @@
-# Momentum Explosion + ORB - 80 curated liquid USDT Futures pairs
+# Momentum Explosion + ORB - curated liquid USDT Futures preferences; runtime fills vacancies dynamically
 # Static CoinDCX USDT Futures allowlist. Runtime verifies every pair
 # against CoinDCX active USDT Futures instruments before scanning.
 symbols:
@@ -15,7 +15,6 @@ symbols:
   - B-BCH_USDT
   - B-AVAX_USDT
   - B-DOT_USDT
-  - B-TON_USDT
   - B-SUI_USDT
   - B-HBAR_USDT
   - B-XLM_USDT
@@ -34,11 +33,8 @@ symbols:
   - B-OP_USDT
   - B-ARB_USDT
   - B-POL_USDT
-  - B-PEPE_USDT
   - B-1000SHIB_USDT
   - B-WIF_USDT
-  - B-BONK_USDT
-  - B-FLOKI_USDT
   - B-SEI_USDT
   - B-TIA_USDT
   - B-JUP_USDT
@@ -59,13 +55,11 @@ symbols:
   - B-MEW_USDT
   - B-EGLD_USDT
   - B-XTZ_USDT
-  - B-EOS_USDT
   - B-RUNE_USDT
   - B-KAS_USDT
   - B-JASMY_USDT
   - B-ZEC_USDT
   - B-DASH_USDT
-  - B-MKR_USDT
   - B-LDO_USDT
   - B-GRT_USDT
   - B-IMX_USDT
