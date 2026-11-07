@@ -50,7 +50,7 @@ def _validated_indicators(indicators: Dict[str, Any]) -> Dict[str, Any]:
 
     for key in _BOOLEAN_KEYS:
         value = clean.get(key)
-        if value is None and key == "di_direction_ok":
+        if value is None and key in ("di_direction_ok", "orb_di_aligned"):
             # Preserve the tri-state meaning: unavailable DI is not opposition.
             clean[key] = None
             continue

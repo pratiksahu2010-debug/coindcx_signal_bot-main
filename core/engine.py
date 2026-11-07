@@ -728,6 +728,14 @@ class SignalEngine:
                          if len(close) >= 4 and float(close[-4]) > 0 else 0.0)
             if orb_result.get("state") in ("ORB_BREAKOUT", "ORB_RETEST"):
                 direction = orb_result.get("direction")
+            elif orb_result.get("state") == "ORB_FAILED_BREAKOUT":
+                # Do not let a failed ORB breakout immediately re-enter as a
+                # same-direction Momentum Explosion on the same completed bar.
+                failed_direction = orb_result.get("direction")
+                if short_roc > 0 and failed_direction != "LONG":
+                    direction = "LONG"
+                elif short_roc < 0 and failed_direction != "SHORT":
+                    direction = "SHORT"
             elif short_roc > 0:
                 # ROC can seed an early watch candidate; MACD remains a hard
                 # confirmation for Momentum trade alerts later in the pipeline.
