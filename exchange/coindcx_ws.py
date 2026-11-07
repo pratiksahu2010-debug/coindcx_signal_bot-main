@@ -179,7 +179,14 @@ class CoinDCXFuturesStream:
                     now_ms = int(time.time() * 1000)
                     if interval_ms <= 0 or ts % interval_ms != 0:
                         continue
-                    if ts > now_ms + 6_000 or now_ms - ts > interval_ms + 30_000:
+                    # This stream is forming-candle context only. Once the
+                    # interval has closed, REST owns the final candle; a delayed
+                    # websocket update must not overwrite it or create stale watchlist context.
+                    if (
+                        ts > now_ms + 6_000
+                        or ts + interval_ms <= now_ms
+                        or now_ms - ts > interval_ms + 30_000
+                    ):
                         logger.debug(
                             f"WS_CANDLE_TIMESTAMP_REJECTED pair={pair} tf={interval} "
                             f"open_ms={ts} now_ms={now_ms}"
