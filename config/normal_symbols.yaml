@@ -1,4 +1,4 @@
-# Normal Engine - 40 curated liquid USDT Futures pairs
+# Normal Engine - curated liquid USDT Futures preferences; runtime fills vacancies dynamically
 # Static CoinDCX USDT Futures allowlist. Runtime verifies every pair
 # against CoinDCX active USDT Futures instruments before scanning.
 symbols:
@@ -15,7 +15,6 @@ symbols:
   - B-BCH_USDT
   - B-AVAX_USDT
   - B-DOT_USDT
-  - B-TON_USDT
   - B-SUI_USDT
   - B-HBAR_USDT
   - B-XLM_USDT
@@ -34,11 +33,8 @@ symbols:
   - B-OP_USDT
   - B-ARB_USDT
   - B-POL_USDT
-  - B-PEPE_USDT
   - B-1000SHIB_USDT
   - B-WIF_USDT
-  - B-BONK_USDT
-  - B-FLOKI_USDT
   - B-SEI_USDT
   - B-TIA_USDT
   - B-JUP_USDT
