@@ -562,6 +562,10 @@ async def test_futures_orderbook_normalizes_top_of_book_and_spread(monkeypatch):
     assert book["best_ask"] == 100.2
     assert book["spread_bps"] == pytest.approx(19.98001998)
     assert book["age_seconds"] == 0.0
+    assert book["bid_depth_usdt"] == pytest.approx(598.0)
+    assert book["ask_depth_usdt"] == pytest.approx(806.0)
+    assert book["min_side_depth_usdt"] == pytest.approx(598.0)
+    assert book["depth_levels"] == 5
 
 
 @pytest.mark.asyncio
@@ -615,3 +619,19 @@ def test_orderbook_spread_gate_is_fail_closed_and_respects_configured_limit():
     assert evaluate_orderbook_spread({}, 20.0) == (False, None, "orderbook_unavailable")
     assert evaluate_orderbook_spread({"spread_bps": float("nan")}, 20.0)[0] is False
     assert evaluate_orderbook_spread({"spread_bps": 5.0}, 0.0)[0] is False
+
+
+
+def test_orderbook_depth_gate_is_optional_and_enforces_both_sides():
+    from core.market_quality import evaluate_orderbook_depth
+
+    snapshot = {"bid_depth_usdt": 2500.0, "ask_depth_usdt": 1800.0}
+    assert evaluate_orderbook_depth(snapshot, 1000.0) == (True, 1800.0, "ok")
+    assert evaluate_orderbook_depth(snapshot, 1800.0) == (True, 1800.0, "ok")
+    assert evaluate_orderbook_depth(snapshot, 1800.01) == (False, 1800.0, "insufficient_depth")
+    assert evaluate_orderbook_depth(snapshot, 0.0) == (True, 1800.0, "disabled")
+    assert evaluate_orderbook_depth({}, 0.0) == (True, None, "disabled")
+    assert evaluate_orderbook_depth({}, 1000.0) == (False, None, "orderbook_depth_unavailable")
+    assert evaluate_orderbook_depth(
+        {"bid_depth_usdt": float("nan"), "ask_depth_usdt": 1000}, 0
+    )[0] is False

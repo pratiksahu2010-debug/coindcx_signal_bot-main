@@ -246,9 +246,23 @@ class CoinDCXRest:
         spread_bps = ((best_ask - best_bid) / midpoint) * 10_000.0
         if not __import__("math").isfinite(spread_bps) or spread_bps < 0:
             raise ValueError("invalid Futures orderbook spread")
+
+        # Aggregate quote-notional across the nearest five price levels on
+        # each side. CoinDCX Futures level quantities are base-asset amounts.
+        bid_levels = sorted(bids, key=lambda level: level[0], reverse=True)[:5]
+        ask_levels = sorted(asks, key=lambda level: level[0])[:5]
+        bid_depth_usdt = sum(price * quantity for price, quantity in bid_levels)
+        ask_depth_usdt = sum(price * quantity for price, quantity in ask_levels)
+        min_side_depth_usdt = min(bid_depth_usdt, ask_depth_usdt)
+        if not all(__import__("math").isfinite(value) and value >= 0 for value in (
+            bid_depth_usdt, ask_depth_usdt, min_side_depth_usdt
+        )):
+            raise ValueError("invalid Futures orderbook depth")
         result = {
             "pair": market, "best_bid": best_bid, "best_ask": best_ask,
             "mid_price": midpoint, "spread_bps": spread_bps,
+            "bid_depth_usdt": bid_depth_usdt, "ask_depth_usdt": ask_depth_usdt,
+            "min_side_depth_usdt": min_side_depth_usdt, "depth_levels": 5,
             "timestamp": self._timestamp_ms(timestamp), "age_seconds": age,
             "depth": depth,
         }
