@@ -984,3 +984,24 @@ async def test_malformed_candle_envelope_is_cached_to_avoid_repeated_rest_calls(
     assert calls == 1
     assert client.candle_cache_hits == 1
     assert client.get_stale_market_timeframes() == {"B-BTC_USDT": {"5m": 1}}
+
+
+@pytest.mark.asyncio
+async def test_malformed_candle_response_keeps_cache_within_size_bound(monkeypatch):
+    import time
+
+    base = 1_800_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: base + 600)
+    client = CoinDCXRest()
+    now = time.monotonic()
+    client._candle_cache = {
+        ("seed", index): (now, [])
+        for index in range(1001)
+    }
+
+    async def malformed_get(url, params=None):
+        return {"error": "temporarily unavailable"}
+
+    client._get = malformed_get
+    assert await client.get_candles("B-BTC_USDT", "5m", limit=10) == []
+    assert len(client._candle_cache) <= 1000
