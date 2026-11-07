@@ -4,13 +4,16 @@ REST remains authoritative for completed-candle decisions. This client only
 feeds live, forming candles into CandleBuilder and safely degrades on disconnect.
 """
 import asyncio
+import math
 import re
+import time
 from typing import Any, Dict, Iterable, Optional
 
 import socketio
 
 from config import settings
 from utils.logger import logger
+from utils.time_utils import parse_interval
 
 
 class CoinDCXFuturesStream:
@@ -168,15 +171,37 @@ class CoinDCXFuturesStream:
                     match = re.search(r"_(1m|5m|15m|1h|1d)-futures", channel.lower())
                     interval = match.group(1) if match else None
                 if interval:
+                    # WebSocket candles are forming-candle context only. Reject
+                    # malformed, misaligned, stale, or implausibly future events
+                    # before they can mutate the shared buffer or watchlist.
+                    interval_ms = int(parse_interval(interval).total_seconds() * 1000)
+                    now_ms = int(time.time() * 1000)
+                    if interval_ms <= 0 or ts % interval_ms != 0:
+                        continue
+                    if ts > now_ms + 6_000 or now_ms - ts > interval_ms + 30_000:
+                        logger.debug(
+                            f"WS_CANDLE_TIMESTAMP_REJECTED pair={pair} tf={interval} "
+                            f"open_ms={ts} now_ms={now_ms}"
+                        )
+                        continue
+                    prices = (candle["open"], candle["high"], candle["low"], candle["close"])
+                    if (
+                        not all(math.isfinite(value) and value > 0 for value in prices)
+                        or not math.isfinite(candle["volume"])
+                        or candle["volume"] < 0
+                        or candle["high"] < max(candle["open"], candle["close"], candle["low"])
+                        or candle["low"] > min(candle["open"], candle["close"], candle["high"])
+                    ):
+                        continue
                     self.candles.on_candle(pair, interval, candle)
                     if self.on_candle_callback is not None:
                         try:
                             self.on_candle_callback(pair, interval, candle)
                         except Exception as exc:
                             logger.debug(f"WS_CANDLE_CALLBACK_SKIPPED {pair}: {exc}")
-                    raw_event_time = row.get("Ets") or row.get("close_time") or ts
-                    event_time = int(float(raw_event_time))
-                    self._last_event_ms = event_time * 1000 if event_time < 10**12 else event_time
+                    # Track local receive time for feed liveness, not an exchange
+                    # event timestamp whose clock may be skewed or malformed.
+                    self._last_event_ms = now_ms
             except (TypeError, ValueError, OverflowError):
                 continue
 

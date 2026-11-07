@@ -405,6 +405,7 @@ def test_futures_ws_candle_parser_recovers_full_pair_from_channel_and_normalizes
     builder = CandleStub()
     stream = CoinDCXFuturesStream(builder, CoinDCXRest())
     base = 1_800_000_000
+    monkeypatch.setattr("exchange.coindcx_ws.time.time", lambda: base + 120)
     stream._handle_candlestick({"data": {
         "channel": "B-BTC_USDT_5m-futures",
         "open_time": base,
@@ -416,10 +417,10 @@ def test_futures_ws_candle_parser_recovers_full_pair_from_channel_and_normalizes
     assert pair == "B-BTC_USDT"
     assert interval == "5m"
     assert candle["time"] == base * 1000
-    assert stream._last_event_ms == (base + 300) * 1000
+    assert stream._last_event_ms == (base + 120) * 1000
 
 
-def test_futures_ws_candle_parser_reads_channel_from_outer_event_envelope():
+def test_futures_ws_candle_parser_reads_channel_from_outer_event_envelope(monkeypatch):
     from exchange.coindcx_ws import CoinDCXFuturesStream
 
     class CandleStub:
@@ -430,6 +431,7 @@ def test_futures_ws_candle_parser_reads_channel_from_outer_event_envelope():
             self.rows.append((pair, interval, candle))
 
     builder = CandleStub()
+    monkeypatch.setattr("exchange.coindcx_ws.time.time", lambda: 1_800_000_120)
     stream = CoinDCXFuturesStream(builder, CoinDCXRest())
     stream._handle_candlestick({
         "channel": "candlestick@B-ETH_USDT_5m-futures",
@@ -635,3 +637,52 @@ def test_orderbook_depth_gate_is_optional_and_enforces_both_sides():
     assert evaluate_orderbook_depth(
         {"bid_depth_usdt": float("nan"), "ask_depth_usdt": 1000}, 0
     )[0] is False
+
+
+@pytest.mark.parametrize("open_time_offset", [-600, 60])
+def test_futures_ws_rejects_stale_and_future_candles(monkeypatch, open_time_offset):
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    class CandleStub:
+        def __init__(self):
+            self.rows = []
+        def on_candle(self, pair, interval, candle):
+            self.rows.append((pair, interval, candle))
+
+    now_s = 1_800_000_120
+    monkeypatch.setattr("exchange.coindcx_ws.time.time", lambda: now_s)
+    builder = CandleStub()
+    stream = CoinDCXFuturesStream(builder, CoinDCXRest())
+    open_s = 1_800_000_000 + open_time_offset
+    stream._handle_candlestick({
+        "channel": "B-BTC_USDT_5m-futures",
+        "data": {
+            "open_time": open_s,
+            "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10,
+        },
+    })
+    assert builder.rows == []
+    assert stream._last_event_ms is None
+
+
+def test_futures_ws_rejects_malformed_ohlcv_before_buffer_update(monkeypatch):
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    class CandleStub:
+        def __init__(self):
+            self.rows = []
+        def on_candle(self, pair, interval, candle):
+            self.rows.append((pair, interval, candle))
+
+    base = 1_800_000_000
+    monkeypatch.setattr("exchange.coindcx_ws.time.time", lambda: base + 120)
+    builder = CandleStub()
+    stream = CoinDCXFuturesStream(builder, CoinDCXRest())
+    stream._handle_candlestick({
+        "channel": "B-BTC_USDT_5m-futures",
+        "data": {
+            "open_time": base,
+            "open": 100, "high": 98, "low": 99, "close": 101, "volume": 10,
+        },
+    })
+    assert builder.rows == []
