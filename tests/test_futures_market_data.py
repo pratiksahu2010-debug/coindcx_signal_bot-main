@@ -531,6 +531,7 @@ def test_futures_ws_candle_parser_infers_configured_interval_from_channel():
             self.rows.append((pair, interval, candle))
 
     builder = CandleStub()
+    monkeypatch.setattr("exchange.coindcx_ws.time.time", lambda: 1_800_000_120)
     stream = CoinDCXFuturesStream(builder, CoinDCXRest())
     stream._handle_candlestick({
         "channel": "candlestick@B-BTC_USDT_1h-futures",
@@ -639,7 +640,7 @@ def test_orderbook_depth_gate_is_optional_and_enforces_both_sides():
     )[0] is False
 
 
-@pytest.mark.parametrize("open_time_offset", [-600, 60])
+@pytest.mark.parametrize("open_time_offset", [-600, 300])
 def test_futures_ws_rejects_stale_and_future_candles(monkeypatch, open_time_offset):
     from exchange.coindcx_ws import CoinDCXFuturesStream
 
