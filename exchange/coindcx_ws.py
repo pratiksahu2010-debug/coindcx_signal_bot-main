@@ -207,6 +207,19 @@ class CoinDCXFuturesStream:
                         or candle["low"] > min(candle["open"], candle["close"], candle["high"])
                     ):
                         continue
+                    # CandleBuffer rejects older timestamps, but the callback
+                    # must be fenced too: otherwise a stale event can still
+                    # update intrabar watchlists after the buffer rejects it.
+                    get_buffer = getattr(self.candles, "get_buffer", None)
+                    if callable(get_buffer):
+                        buffer = get_buffer(pair, interval)
+                        buffered = getattr(buffer, "candles", None)
+                        if buffered and ts < int(buffered[-1].get("time", 0)):
+                            logger.debug(
+                                f"WS_CANDLE_OUT_OF_ORDER_REJECTED pair={pair} tf={interval} "
+                                f"event_ms={ts} latest_ms={buffered[-1].get('time')}"
+                            )
+                            continue
                     self.candles.on_candle(pair, interval, candle)
                     if self.on_candle_callback is not None:
                         try:
