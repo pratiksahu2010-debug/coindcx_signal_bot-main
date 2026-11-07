@@ -2,15 +2,22 @@
 import asyncio
 import functools
 import random
-from typing import Callable, TypeVar, Any
+from typing import Callable, Optional, TypeVar, Any
 
 from utils.logger import logger
 
 T = TypeVar("T")
 
 
-def async_retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0, jitter: float = 0.2):
-    """Retry operation failures with exponential jitter; never swallow cancellation."""
+def async_retry(
+    max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0,
+    jitter: float = 0.2, retry_if: Optional[Callable[[Exception], bool]] = None,
+):
+    """Retry selected operation failures with exponential jitter.
+
+    When supplied, retry_if decides whether an exception is transient. Exceptions
+    rejected by the predicate are raised immediately; task cancellation propagates.
+    """
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
     if delay < 0:
@@ -30,6 +37,8 @@ def async_retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0,
                     return await func(*args, **kwargs)
                 except Exception as exc:
                     last_exc = exc
+                    if retry_if is not None and not retry_if(exc):
+                        raise
                     if attempt == max_attempts:
                         break
                     wait_seconds = current_delay + random.uniform(0.0, current_delay * jitter)
