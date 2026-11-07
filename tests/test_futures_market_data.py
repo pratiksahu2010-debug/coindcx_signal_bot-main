@@ -888,3 +888,36 @@ def test_futures_ws_rejects_monthly_candles_instead_of_treating_them_as_minutes(
     assert builder.rows == []
     assert stream._last_event_ms is None
 
+
+
+
+def test_futures_ws_out_of_order_candle_does_not_reach_intrabar_callback(monkeypatch):
+    from exchange.candle_builder import CandleBuilder
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    base = 1_800_000_000_000
+    # The next bucket is accepted just inside the 6-second future tolerance.
+    # A delayed update for the still-forming previous bucket must not reach
+    # the callback after the buffer has advanced.
+    monkeypatch.setattr("exchange.coindcx_ws.time.time", lambda: (base + 299_000) / 1000)
+    builder = CandleBuilder()
+    builder.seed("B-BTC_USDT", "5m", [{
+        "time": base + 300_000,
+        "open": 101, "high": 103, "low": 100, "close": 102, "volume": 20,
+    }])
+    callbacks = []
+    stream = CoinDCXFuturesStream(builder, CoinDCXRest())
+    stream.set_candle_callback(lambda pair, interval, candle: callbacks.append(candle))
+
+    stream._handle_candlestick({
+        "channel": "candlestick@B-BTC_USDT_5m-futures",
+        "data": {
+            "open_time": base,
+            "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10,
+        },
+    })
+
+    buffered = builder.get_buffer("B-BTC_USDT", "5m").candles
+    assert len(buffered) == 1
+    assert buffered[0]["time"] == base + 300_000
+    assert callbacks == []
