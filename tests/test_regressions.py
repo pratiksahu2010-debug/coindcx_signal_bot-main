@@ -957,3 +957,30 @@ def test_candle_builder_replaces_buffer_with_valid_rest_refresh():
     assert len(buffer) == 1
     assert buffer.candles[0]["time"] == 3_000
     assert buffer.last_close() == 103.0
+
+def test_runtime_config_rejects_non_finite_safety_thresholds(monkeypatch):
+    import pytest
+    from app.lifespan import validate_runtime_config
+
+    monkeypatch.setattr("config.settings.signal_threshold", float("nan"))
+    with pytest.raises(ValueError, match="SIGNAL_THRESHOLD must be a finite number"):
+        validate_runtime_config()
+
+
+def test_runtime_config_rejects_invalid_execution_quality_thresholds(monkeypatch):
+    import pytest
+    from app.lifespan import validate_runtime_config
+
+    monkeypatch.setattr("config.settings.futures_max_spread_bps", 0.0)
+    with pytest.raises(ValueError, match="FUTURES_MAX_SPREAD_BPS must be positive"):
+        validate_runtime_config()
+
+
+def test_runtime_config_rejects_out_of_range_orb_adx(monkeypatch):
+    import pytest
+    from app.lifespan import validate_runtime_config
+
+    monkeypatch.setattr("config.settings.orb_adx_min", 101.0)
+    with pytest.raises(ValueError, match="ORB_ADX_MIN must be between 0 and 100"):
+        validate_runtime_config()
+
