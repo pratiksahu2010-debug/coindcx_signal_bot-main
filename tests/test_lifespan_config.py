@@ -37,3 +37,26 @@ def test_runtime_config_rejects_timeframe_not_supported_by_futures_adapter(monke
     monkeypatch.setattr(settings, "candle_primary_tf", "30m")
     with pytest.raises(ValueError, match="unsupported by the CoinDCX Futures candle adapter"):
         validate_runtime_config()
+
+
+
+@pytest.mark.asyncio
+async def test_expected_background_task_cancellation_during_shutdown_is_not_error(monkeypatch):
+    import asyncio
+    from app.lifespan import _watch_background_task
+
+    state = {"shutting_down": True}
+    events = []
+    monkeypatch.setattr("app.lifespan.logger.info", lambda message: events.append(("info", message)))
+    monkeypatch.setattr("app.lifespan.logger.error", lambda message: events.append(("error", message)))
+
+    task = asyncio.create_task(asyncio.sleep(60))
+    _watch_background_task(task, state, "scan_task")
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0)
+
+    assert state["scan_task_status"] == "stopped"
+    assert state["scan_task_error"] == "task_cancelled"
+    assert events == [("info", "BACKGROUND_TASK_STOPPED task=scan_task reason=application_shutdown")]
