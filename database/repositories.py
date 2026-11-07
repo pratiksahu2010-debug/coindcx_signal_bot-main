@@ -667,7 +667,9 @@ async def signal_delivery_queue_stats() -> dict:
             counts = {status: 0 for status in statuses}
             counts.update({str(status): int(count) for status, count in result.all()})
             oldest_result = await session.execute(
-                select(func.min(SignalDeliveryRecord.updated_at)).where(
+                select(func.min(func.coalesce(
+                    SignalDeliveryRecord.created_at, SignalDeliveryRecord.updated_at
+                ))).where(
                     SignalDeliveryRecord.status.in_(("pending", "retry", "sending"))
                 )
             )
