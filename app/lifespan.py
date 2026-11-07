@@ -44,6 +44,17 @@ def validate_runtime_config() -> None:
         raise ValueError("NORMAL_ADX_MIN must be between 0 and 100")
     if not 0.0 <= settings.momentum_adx_explosion <= 100.0:
         raise ValueError("MOMENTUM_ADX_MIN must be between 0 and 100")
+    if settings.orb_min_rvol <= 0:
+        raise ValueError("ORB_MIN_RVOL must be positive")
+    if settings.orb_max_extension_atr <= 0:
+        raise ValueError("ORB_MAX_EXTENSION_ATR must be positive")
+    if settings.orb_active_minutes <= 0:
+        raise ValueError("ORB_ACTIVE_MINUTES must be positive")
+    if settings.memory_warning_mb <= 0:
+        raise ValueError("MEMORY_WARNING_MB must be positive")
+    import logging
+    if not isinstance(getattr(logging, settings.log_level.upper(), None), int):
+        raise ValueError("LOG_LEVEL must be a valid Python logging level")
 
 
 @asynccontextmanager
