@@ -22,10 +22,6 @@ from database.db import init_db, dispose_db
 
 def validate_runtime_config() -> None:
     """Fail fast on invalid timeframe and safety-critical runtime settings."""
-    primary = parse_interval(settings.candle_primary_tf)
-    confirm = parse_interval(settings.candle_confirm_tf)
-    if confirm <= primary:
-        raise ValueError("CANDLE_CONFIRM_TF must be greater than CANDLE_PRIMARY_TF")
     supported_candle_intervals = {"1m", "5m", "15m", "1h", "1d"}
     for setting_name, interval in (
         ("CANDLE_PRIMARY_TF", settings.candle_primary_tf),
@@ -36,6 +32,10 @@ def validate_runtime_config() -> None:
                 f"{setting_name}={interval!r} is unsupported by the CoinDCX Futures candle adapter; "
                 f"supported intervals: {', '.join(sorted(supported_candle_intervals))}"
             )
+    primary = parse_interval(settings.candle_primary_tf)
+    confirm = parse_interval(settings.candle_confirm_tf)
+    if confirm <= primary:
+        raise ValueError("CANDLE_CONFIRM_TF must be greater than CANDLE_PRIMARY_TF")
     if settings.candle_close_grace_seconds < 0:
         raise ValueError("CANDLE_CLOSE_GRACE_SECONDS cannot be negative")
     if settings.max_signal_age_seconds <= 0:
