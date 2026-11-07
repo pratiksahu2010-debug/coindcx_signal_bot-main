@@ -853,3 +853,38 @@ def test_futures_ws_rejects_delayed_candle_after_interval_close(monkeypatch):
 
     assert builder.rows == []
     assert stream._last_event_ms is None
+
+@pytest.mark.parametrize(
+    "duration,channel_interval",
+    [("1M", "1M"), ("", "1M")],
+)
+def test_futures_ws_rejects_monthly_candles_instead_of_treating_them_as_minutes(
+    monkeypatch, duration, channel_interval
+):
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    class CandleStub:
+        def __init__(self):
+            self.rows = []
+
+        def on_candle(self, pair, interval, candle):
+            self.rows.append((pair, interval, candle))
+
+    base = 1_800_000_000
+    monkeypatch.setattr("exchange.coindcx_ws.time.time", lambda: base + 120)
+    builder = CandleStub()
+    stream = CoinDCXFuturesStream(builder, CoinDCXRest())
+    row = {
+        "open_time": base,
+        "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10,
+    }
+    if duration:
+        row["duration"] = duration
+    stream._handle_candlestick({
+        "channel": f"candlestick@B-BTC_USDT_{channel_interval}-futures",
+        "data": row,
+    })
+
+    assert builder.rows == []
+    assert stream._last_event_ms is None
+
