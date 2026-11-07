@@ -170,10 +170,10 @@ def test_outbox_queue_stats_reports_durable_status_counts_and_oldest_age(tmp_pat
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             async with database_db.SessionLocal() as session:
                 session.add_all([
-                    SignalDeliveryRecord(delivery_key="pending-1", payload="{}", status="pending", attempts=0, next_attempt_at=now, updated_at=now-timedelta(seconds=45)),
-                    SignalDeliveryRecord(delivery_key="retry-1", payload="{}", status="retry", attempts=1, next_attempt_at=now, updated_at=now-timedelta(seconds=20)),
-                    SignalDeliveryRecord(delivery_key="sent-1", payload="{}", status="delivered", attempts=1, next_attempt_at=now, updated_at=now),
-                    SignalDeliveryRecord(delivery_key="failed-1", payload="{}", status="failed", attempts=8, next_attempt_at=now, updated_at=now),
+                    SignalDeliveryRecord(delivery_key="pending-1", payload="{}", status="pending", attempts=0, next_attempt_at=now, created_at=now-timedelta(seconds=45), updated_at=now),
+                    SignalDeliveryRecord(delivery_key="retry-1", payload="{}", status="retry", attempts=1, next_attempt_at=now, created_at=now-timedelta(seconds=60), updated_at=now),
+                    SignalDeliveryRecord(delivery_key="sent-1", payload="{}", status="delivered", attempts=1, next_attempt_at=now, created_at=now, updated_at=now),
+                    SignalDeliveryRecord(delivery_key="failed-1", payload="{}", status="failed", attempts=8, next_attempt_at=now, created_at=now, updated_at=now),
                 ])
                 await session.commit()
             stats = await signal_delivery_queue_stats()
@@ -183,7 +183,8 @@ def test_outbox_queue_stats_reports_durable_status_counts_and_oldest_age(tmp_pat
             assert stats["counts"]["retry"] == 1
             assert stats["counts"]["delivered"] == 1
             assert stats["counts"]["failed"] == 1
-            assert 44 <= stats["oldest_pending_age_seconds"] <= 47
+            # Queue age uses immutable enqueue time, not a recent retry/update.
+            assert 59 <= stats["oldest_pending_age_seconds"] <= 62
         finally:
             database_db.engine, database_db.SessionLocal = old_engine, old_factory
             await engine.dispose()
