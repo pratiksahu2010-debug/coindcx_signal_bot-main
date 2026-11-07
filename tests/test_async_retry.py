@@ -29,7 +29,10 @@ async def test_async_retry_adds_bounded_jitter_and_exponential_backoff(monkeypat
 
 @pytest.mark.asyncio
 async def test_async_retry_raises_last_exception_after_attempt_limit(monkeypatch):
-    monkeypatch.setattr("utils.retry.asyncio.sleep", lambda _: asyncio.sleep(0))
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("utils.retry.asyncio.sleep", fake_sleep)
     calls = {"count": 0}
 
     @async_retry(max_attempts=2, delay=0, jitter=0)
