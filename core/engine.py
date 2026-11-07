@@ -1169,6 +1169,17 @@ class SignalEngine:
                     return
                 if spread_bps is not None:
                     signal["indicators"]["spread_bps"] = round(spread_bps, 3)
+                # The orderbook request is an extra network hop; do not allow
+                # it to turn a fresh candle into a stale alert.
+                final_age = candle_age_seconds(
+                    int(utc_now().timestamp() * 1000), candle_ts, primary_interval_ms
+                )
+                if final_age < 0 or final_age > settings.max_signal_age_seconds:
+                    self._last_processed.setdefault(engine, {})[pair] = candle_ts
+                    logger.info(
+                        f"STALE_AFTER_ORDERBOOK_SKIP {pair} age_seconds={final_age:.1f}"
+                    )
+                    return
             if entry_state == "RETEST":
                 # Preserve this qualified setup briefly. It can alert only if a
                 # fresh Futures LTP returns to the original entry band without

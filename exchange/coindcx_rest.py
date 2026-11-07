@@ -214,7 +214,14 @@ class CoinDCXRest:
         now_mono = time.monotonic()
         cached = self._orderbook_cache.get(cache_key)
         if cached and now_mono - cached[0] <= self.ORDERBOOK_CACHE_TTL_SECONDS:
-            return dict(cached[1])
+            cached_snapshot = dict(cached[1])
+            cached_age = self._ticker_age_seconds(
+                cached_snapshot.get("timestamp"), int(time.time() * 1000)
+            )
+            if self._is_fresh_ticker_age(cached_age, self.MAX_ORDERBOOK_AGE_SECONDS):
+                cached_snapshot["age_seconds"] = cached_age
+                return cached_snapshot
+            self._orderbook_cache.pop(cache_key, None)
 
         payload = await self._get(
             f"{self.public}/market_data/v3/orderbook/{market}-futures/{depth}"
