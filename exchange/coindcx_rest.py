@@ -380,7 +380,13 @@ class CoinDCXRest:
                     and __import__("math").isfinite(price)
                     and self._is_fresh_ticker_age((now_ms - event_ts) / 1000.0, self.MAX_WS_TICKER_AGE_SECONDS)
                 ):
-                    self._ws_prices[self._market_key(market)] = (price, event_ts)
+                    market_key = self._market_key(market)
+                    cached = self._ws_prices.get(market_key)
+                    # WebSocket delivery can be reordered. Never let an older
+                    # exchange event roll the live-price cache backwards.
+                    if cached is not None and event_ts < cached[1]:
+                        continue
+                    self._ws_prices[market_key] = (price, event_ts)
                     accepted += 1
             except (TypeError, ValueError, OverflowError):
                 continue
