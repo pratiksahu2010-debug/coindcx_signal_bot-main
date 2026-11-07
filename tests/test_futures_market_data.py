@@ -392,7 +392,7 @@ async def test_futures_candles_handle_nested_data_candles_envelope(monkeypatch):
     assert candles[0]["close"] == 101.0
 
 
-def test_futures_ws_candle_parser_recovers_full_pair_from_channel_and_normalizes_event_time():
+def test_futures_ws_candle_parser_recovers_full_pair_from_channel_and_normalizes_event_time(monkeypatch):
     from exchange.coindcx_ws import CoinDCXFuturesStream
 
     class CandleStub:
@@ -521,7 +521,7 @@ async def test_futures_ws_subscribes_to_configured_timeframes(monkeypatch):
     }
 
 
-def test_futures_ws_candle_parser_infers_configured_interval_from_channel():
+def test_futures_ws_candle_parser_infers_configured_interval_from_channel(monkeypatch):
     from exchange.coindcx_ws import CoinDCXFuturesStream
 
     class CandleStub:
