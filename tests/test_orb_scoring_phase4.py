@@ -38,4 +38,6 @@ def test_orb_score_rewards_adx_di_and_adx_rising():
 def test_orb_short_score_uses_directional_close_location():
     result = ScoringEngine().score_orb(orb_quality(close_location=0.14), "SHORT")
     close_component = next(c for c in result.components if c.name == "ORB Close Location")
-    assert close_component.points == 1.0
+    # SHORT close at 0.14 maps to a directional close-location score of 0.86,
+    # which is in the strongest scoring band (1.25 / 1.25).
+    assert close_component.points == 1.25
