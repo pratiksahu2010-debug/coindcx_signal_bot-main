@@ -907,7 +907,9 @@ def test_intrabar_momentum_rvol_uses_live_candle_volume(monkeypatch):
     engine = SignalEngine.__new__(SignalEngine)
     engine.candles = CandleStub()
     engine.symbols = SymbolStub()
-    engine.watchlists = {"momentum": []}
+    from core.watchlist_manager import WatchlistManager
+
+    engine.watchlists = {"momentum": WatchlistManager()}
     monkeypatch.setattr(settings, "candle_primary_tf", "5m")
 
     engine.on_intrabar_candle("B-BTC_USDT", "5m", {
@@ -915,5 +917,6 @@ def test_intrabar_momentum_rvol_uses_live_candle_volume(monkeypatch):
         "close": 101.0, "volume": 100.0,
     })
 
-    assert len(engine.watchlists["momentum"]) == 1
-    assert engine.watchlists["momentum"][0]["indicators"]["live_rvol"] == 10.0
+    entries = engine.watchlists["momentum"].list_all("momentum")
+    assert len(entries) == 1
+    assert entries[0]["indicators"]["live_rvol"] == 10.0
