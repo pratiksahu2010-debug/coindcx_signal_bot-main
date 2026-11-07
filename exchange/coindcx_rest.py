@@ -502,14 +502,21 @@ class CoinDCXRest:
         resolution = resolution_map.get(interval)
         if resolution is None:
             raise ValueError(f"Unsupported CoinDCX Futures candle interval: {interval}")
-        cache_key = (pair, interval, limit, start_time, end_time)
+        now_ms = int(time.time() * 1000)
+        end_ms = int(end_time or now_ms)
+        duration_ms = int(parse_interval(interval).total_seconds() * 1000)
+        grace_ms = max(0, int(settings.candle_close_grace_seconds)) * 1000
+        # A cached default-window response is valid only within the same
+        # completed-candle bucket. Otherwise a pre-close response could hide
+        # the candle that becomes eligible immediately after the close grace.
+        cache_boundary = (
+            (now_ms - grace_ms) // duration_ms if end_time is None else None
+        )
+        cache_key = (pair, interval, limit, start_time, end_time, cache_boundary)
         cached = self._candle_cache.get(cache_key)
         if cached and time.monotonic() - cached[0] < 5:
             self.candle_cache_hits += 1
             return [dict(x) for x in cached[1]]
-        now_ms = int(time.time() * 1000)
-        end_ms = int(end_time or now_ms)
-        duration_ms = int(parse_interval(interval).total_seconds() * 1000)
         start_ms = int(start_time or (end_ms - min(limit, 1000) * duration_ms))
         params = {
             "pair": pair, "from": int(start_ms / 1000),
