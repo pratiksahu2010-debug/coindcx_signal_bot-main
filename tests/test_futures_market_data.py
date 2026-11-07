@@ -442,7 +442,7 @@ def test_futures_ws_candle_parser_reads_channel_from_outer_event_envelope():
     assert builder.rows[0][0:2] == ("B-ETH_USDT", "5m")
 
 
-@pytest.mark.parametrize("limit", [0, -1, 1001, "invalid"])
+@pytest.mark.parametrize("limit", [0, -1, 1.5, 1001, "invalid"])
 @pytest.mark.asyncio
 async def test_futures_candle_request_rejects_invalid_limit_before_network(monkeypatch, limit):
     client = CoinDCXRest()
