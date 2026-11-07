@@ -204,6 +204,8 @@ async def status(request: Request) -> Dict[str, Any]:
         getattr(telegram, "bot", None) and getattr(telegram, "admin_ids", [])
     )
     delivery_worker = getattr(request.app.state, "telegram_delivery_worker", None)
+    from database.repositories import signal_delivery_queue_stats
+    outbox_stats = await signal_delivery_queue_stats()
     return {
         "ok": True,
         "service": "coindcx-signal-bot",
@@ -248,6 +250,7 @@ async def status(request: Request) -> Dict[str, Any]:
         "telegram_outbox_delivered": getattr(delivery_worker, "delivered", 0),
         "telegram_outbox_failed": getattr(delivery_worker, "failed", 0),
         "telegram_outbox_expired": getattr(delivery_worker, "expired", 0),
+        "telegram_outbox_queue": outbox_stats,
     }
 
 
@@ -278,6 +281,7 @@ async def metrics(request: Request) -> Dict[str, Any]:
         "telegram_outbox_delivered": getattr(delivery_worker, "delivered", 0),
         "telegram_outbox_failed": getattr(delivery_worker, "failed", 0),
         "telegram_outbox_expired": getattr(delivery_worker, "expired", 0),
+        "telegram_outbox_queue": outbox_stats,
         "memory_mb": mem["memory_mb"],
         "timestamp": utc_iso(),
     }

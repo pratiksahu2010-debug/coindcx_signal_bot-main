@@ -624,6 +624,45 @@ async def expire_stale_signal_deliveries(limit: int = 100) -> int:
             return 0
 
 
+async def signal_delivery_queue_stats() -> dict:
+    """Return durable Telegram outbox counts and age of the oldest live item."""
+    from datetime import datetime, timezone
+    from sqlalchemy import select, func
+    from database import db as database_db
+    from database.models import SignalDeliveryRecord
+
+    factory = database_db.SessionLocal
+    if factory is None:
+        return {"available": False, "counts": {}, "total": 0, "oldest_pending_age_seconds": None}
+    statuses = ("pending", "retry", "sending", "delivered", "failed", "expired")
+    try:
+        async with factory() as session:
+            result = await session.execute(
+                select(SignalDeliveryRecord.status, func.count(SignalDeliveryRecord.delivery_key))
+                .group_by(SignalDeliveryRecord.status)
+            )
+            counts = {status: 0 for status in statuses}
+            counts.update({str(status): int(count) for status, count in result.all()})
+            oldest_result = await session.execute(
+                select(func.min(SignalDeliveryRecord.updated_at)).where(
+                    SignalDeliveryRecord.status.in_(("pending", "retry", "sending"))
+                )
+            )
+            oldest = oldest_result.scalar_one_or_none()
+        age = None
+        if oldest is not None:
+            if oldest.tzinfo is None:
+                oldest = oldest.replace(tzinfo=timezone.utc)
+            age = max(0.0, (datetime.now(timezone.utc) - oldest).total_seconds())
+        return {
+            "available": True, "counts": counts, "total": sum(counts.values()),
+            "oldest_pending_age_seconds": round(age, 1) if age is not None else None,
+        }
+    except Exception as exc:
+        logger.error("Telegram outbox stats query failed: %s", exc)
+        return {"available": False, "counts": {}, "total": 0, "oldest_pending_age_seconds": None}
+
+
 async def expire_signal_delivery(delivery_key: str) -> bool:
     from datetime import datetime, timezone
     from database import db as database_db
