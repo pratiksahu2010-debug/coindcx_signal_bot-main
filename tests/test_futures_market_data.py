@@ -29,6 +29,38 @@ async def test_futures_15m_candles_are_aggregated_from_three_completed_5m_bars(m
     }
 
 
+
+@pytest.mark.asyncio
+async def test_futures_candles_exclude_rows_outside_requested_time_window(monkeypatch):
+    base = 1_800_000_000
+    now = base + 920
+    start_ms = base * 1000
+    end_ms = (base + 900) * 1000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now)
+    client = CoinDCXRest()
+
+    async def fake_get(url, params=None):
+        assert params["from"] == base
+        assert params["to"] == base + 900
+        return [
+            {"time": base - 300, "open": 99, "high": 100, "low": 98, "close": 99, "volume": 1},
+            {"time": base, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 2},
+            {"time": base + 300, "open": 100, "high": 102, "low": 99, "close": 101, "volume": 3},
+            {"time": base + 600, "open": 101, "high": 103, "low": 100, "close": 102, "volume": 4},
+            {"time": base + 900, "open": 102, "high": 104, "low": 101, "close": 103, "volume": 5},
+        ]
+
+    client._get = fake_get
+    candles = await client.get_candles(
+        "B-BTC_USDT", "5m", limit=10,
+        start_time=start_ms, end_time=end_ms,
+    )
+
+    assert [candle["time"] for candle in candles] == [
+        start_ms, start_ms + 300_000, start_ms + 600_000,
+    ]
+
+
 def test_futures_ws_price_parser_uses_last_trade_not_mark_price(monkeypatch):
     client = CoinDCXRest()
     now_ms = 1_800_000_000_000
