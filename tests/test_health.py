@@ -228,3 +228,35 @@ async def test_health_reports_unexpected_telegram_worker_exit(monkeypatch):
             delattr(app.state, "bot_state")
         else:
             app.state.bot_state = old_state
+
+
+
+@pytest.mark.asyncio
+async def test_health_reports_unexpected_pending_retest_monitor_exit(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(type(settings), "is_production", property(lambda self: False))
+    old_state = getattr(app.state, "bot_state", None)
+    app.state.bot_state = {
+        "database": "postgres",
+        "normal_engine": "running",
+        "momentum_engine": "running",
+        "valid_symbols_normal": 40,
+        "valid_symbols_momentum": 80,
+        "retest_task_status": "failed",
+        "retest_task_error": "RuntimeError: retest monitor crashed",
+    }
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/health")
+            assert resp.status_code == 503
+            data = resp.json()
+            assert "pending_retest_monitor_failed" in data["reasons"]
+            assert data["retest_task_status"] == "failed"
+            assert "retest monitor crashed" in data["retest_task_error"]
+    finally:
+        if old_state is None:
+            delattr(app.state, "bot_state")
+        else:
+            app.state.bot_state = old_state

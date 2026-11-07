@@ -55,6 +55,10 @@ async def health(request: Request):
             bool(state.get("scan_task_expected"))
             and state.get("scan_task_status") in ("failed", "stopped")
         )
+        retest_task_failed = (
+            database != "unavailable"
+            and state.get("retest_task_status") in ("failed", "stopped")
+        )
         delivery_task_failed = (
             bool(state.get("telegram_delivery_task_expected"))
             and state.get("telegram_delivery_task_status") in ("failed", "stopped")
@@ -66,6 +70,7 @@ async def health(request: Request):
             or momentum_symbols_missing
             or telegram_unavailable
             or scan_task_failed
+            or retest_task_failed
             or delivery_task_failed
         ):
             reasons = []
@@ -79,6 +84,8 @@ async def health(request: Request):
                 reasons.append("telegram_delivery_unavailable")
             if scan_task_failed:
                 reasons.append("scan_loop_failed")
+            if retest_task_failed:
+                reasons.append("pending_retest_monitor_failed")
             if delivery_task_failed:
                 reasons.append("telegram_delivery_worker_failed")
             return JSONResponse(
@@ -94,6 +101,8 @@ async def health(request: Request):
                     "telegram_delivery_ready": telegram_delivery_ready,
                     "scan_task_status": state.get("scan_task_status", "unknown"),
                     "scan_task_error": state.get("scan_task_error"),
+                    "retest_task_status": state.get("retest_task_status", "unknown"),
+                    "retest_task_error": state.get("retest_task_error"),
                     "telegram_delivery_task_status": state.get("telegram_delivery_task_status", "unknown"),
                     "telegram_delivery_task_error": state.get("telegram_delivery_task_error"),
                     "reasons": reasons,

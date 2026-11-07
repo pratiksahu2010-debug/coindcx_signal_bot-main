@@ -192,12 +192,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if database_ready:
         scan_task = asyncio.create_task(engine.run_scan_loop(app), name="signal-scan-loop")
         retest_task = asyncio.create_task(engine.pending_retest_monitor_loop(interval_seconds=2.0), name="pending-retest-loop")
+        app.state.bot_state["scan_task_status"] = "running"
+        app.state.bot_state["retest_task_status"] = "running"
         _watch_background_task(scan_task, app.state.bot_state, "scan_task")
         _watch_background_task(retest_task, app.state.bot_state, "retest_task")
         if tg.bot and tg.admin_ids:
             telegram_delivery_task = asyncio.create_task(
                 delivery_worker.run_forever(), name="telegram-delivery-loop"
             )
+            app.state.bot_state["telegram_delivery_task_status"] = "running"
             _watch_background_task(
                 telegram_delivery_task, app.state.bot_state, "telegram_delivery_task"
             )
