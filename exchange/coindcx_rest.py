@@ -207,6 +207,21 @@ class CoinDCXRest:
                 normalized.append((price, quantity))
         return normalized
 
+    def _prune_orderbook_cache(self, now_mono: Optional[float] = None) -> None:
+        """Discard expired snapshots and bound cache growth across unique markets."""
+        now = time.monotonic() if now_mono is None else now_mono
+        cutoff = now - self.ORDERBOOK_CACHE_TTL_SECONDS
+        self._orderbook_cache = {
+            key: value for key, value in self._orderbook_cache.items()
+            if value[0] >= cutoff
+        }
+        if len(self._orderbook_cache) > 1000:
+            for old_key in sorted(
+                self._orderbook_cache,
+                key=lambda key: self._orderbook_cache[key][0],
+            )[:len(self._orderbook_cache) - 1000]:
+                self._orderbook_cache.pop(old_key, None)
+
     async def get_futures_orderbook(self, pair: str, depth: int = 10) -> Dict[str, Any]:
         """Return a fresh, normalized public Futures orderbook snapshot.
 
@@ -220,6 +235,7 @@ class CoinDCXRest:
             raise ValueError("unsupported Futures orderbook depth")
         cache_key = f"{market}:{depth}"
         now_mono = time.monotonic()
+        self._prune_orderbook_cache(now_mono)
         cached = self._orderbook_cache.get(cache_key)
         if cached and now_mono - cached[0] <= self.ORDERBOOK_CACHE_TTL_SECONDS:
             cached_snapshot = dict(cached[1])
@@ -275,6 +291,7 @@ class CoinDCXRest:
             "depth": depth,
         }
         self._orderbook_cache[cache_key] = (time.monotonic(), result)
+        self._prune_orderbook_cache()
         return dict(result)
 
     async def get_ticker(self) -> List[Dict]:
