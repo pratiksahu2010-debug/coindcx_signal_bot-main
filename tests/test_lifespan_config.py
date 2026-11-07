@@ -31,3 +31,9 @@ def test_runtime_config_rejects_invalid_log_level(monkeypatch):
     monkeypatch.setattr(settings, "log_level", "NOT_A_LEVEL")
     with pytest.raises(ValueError, match="LOG_LEVEL"):
         validate_runtime_config()
+
+
+def test_runtime_config_rejects_timeframe_not_supported_by_futures_adapter(monkeypatch):
+    monkeypatch.setattr(settings, "candle_primary_tf", "30m")
+    with pytest.raises(ValueError, match="unsupported by the CoinDCX Futures candle adapter"):
+        validate_runtime_config()
