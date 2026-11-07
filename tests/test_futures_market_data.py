@@ -61,6 +61,23 @@ async def test_futures_candles_exclude_rows_outside_requested_time_window(monkey
     ]
 
 
+def test_futures_ws_prices_ignore_out_of_order_market_updates(monkeypatch):
+    client = CoinDCXRest()
+    now_ms = 1_800_000_000_000
+    monkeypatch.setattr("exchange.coindcx_rest.time.time", lambda: now_ms / 1000)
+
+    assert client.set_ws_prices(
+        {"B-BTC_USDT": {"ls": "65000", "ts": now_ms - 1_000}}, now_ms
+    ) == 1
+    # A delayed event is still within the freshness window, but older than
+    # the cached exchange timestamp and must not replace the newer quote.
+    assert client.set_ws_prices(
+        {"B-BTC_USDT": {"ls": "64900", "ts": now_ms - 2_000}}, now_ms
+    ) == 0
+
+    assert client._ws_prices["BTCUSDT"] == (65000.0, now_ms - 1_000)
+
+
 def test_futures_ws_price_parser_uses_last_trade_not_mark_price(monkeypatch):
     client = CoinDCXRest()
     now_ms = 1_800_000_000_000
