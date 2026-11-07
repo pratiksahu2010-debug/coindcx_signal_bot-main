@@ -84,18 +84,31 @@ class CandleBuilder:
 
     def seed(self, pair: str, tf: str, candles: List[dict]) -> None:
         buf = self.get_buffer(pair, tf)
-        # A REST refresh is authoritative: rebuild the bounded window to remove
-        # gaps, stale rows and out-of-order data from earlier websocket updates.
-        buf.candles.clear()
+        # Build and validate the replacement off to the side. A malformed or
+        # empty REST response must never erase a previously usable live buffer.
+        staged = CandleBuffer(buf.max_len)
         seen = {}
         for c in candles:
             try:
                 seen[int(c["time"])] = dict(c)
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError, OverflowError):
                 continue
         for ts in sorted(seen):
-            buf.update(seen[ts])
-        logger.debug(f"Seeded {pair} {tf} with {len(candles)} candles")
+            staged.update(seen[ts])
+        if not staged.candles:
+            logger.warning(
+                f"CANDLE_SEED_REJECTED pair={pair} tf={tf} "
+                f"received={len(candles)} reason=no_valid_candles"
+            )
+            return
+        # A valid REST refresh is authoritative: replace the bounded window
+        # to remove gaps, stale rows and out-of-order websocket data.
+        buf.candles.clear()
+        buf.candles.extend(staged.candles)
+        logger.debug(
+            f"Seeded {pair} {tf} with {len(buf.candles)} valid candles "
+            f"from {len(candles)} rows"
+        )
 
     def on_candle(self, pair: str, tf: str, candle: dict) -> bool:
         return self.get_buffer(pair, tf).update(candle)
