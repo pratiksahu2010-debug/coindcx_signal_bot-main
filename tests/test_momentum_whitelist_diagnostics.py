@@ -47,3 +47,91 @@ def test_momentum_whitelist_reports_not_listed_and_inactive_symbols(monkeypatch)
         assert manager.momentum_symbols == ["B-BTC_USDT"]
 
     asyncio.run(run())
+
+
+
+def test_unlisted_static_symbols_are_replaced_by_liquid_active_futures(monkeypatch):
+    async def run():
+        class MultiMarketRest(FakeRest):
+            async def get_ticker(self):
+                return [
+                    {"market": "B-BTC_USDT", "base_volume": "10000", "last_price": "1000"},
+                    {"market": "B-ETH_USDT", "base_volume": "10000", "last_price": "100"},
+                    {"market": "B-SOL_USDT", "base_volume": "10000", "last_price": "50"},
+                ]
+
+        rest = MultiMarketRest([
+            {
+                "pair": f"B-{symbol}_USDT",
+                "coindcx_name": f"B-{symbol}_USDT",
+                "target_currency_short_name": symbol,
+                "base_currency_short_name": "USDT",
+                "status": "active",
+            }
+            for symbol in ("BTC", "ETH", "SOL")
+        ])
+        manager = SymbolManager(rest)
+
+        def load_yaml(path):
+            if path.endswith("normal_symbols.yaml"):
+                return ["B-TON_USDT", "B-BTC_USDT"]
+            if path.endswith("momentum_symbols.yaml"):
+                return ["B-TON_USDT", "B-BTC_USDT"]
+            return []
+
+        monkeypatch.setattr(manager, "_load_yaml", load_yaml)
+        monkeypatch.setattr("exchange.symbol_manager.settings.normal_symbol_limit", 2)
+        monkeypatch.setattr("exchange.symbol_manager.settings.momentum_symbol_limit", 2)
+        monkeypatch.setattr("exchange.symbol_manager.settings.normal_min_24h_turnover_usdt", 1_000_000)
+        monkeypatch.setattr("exchange.symbol_manager.settings.momentum_min_24h_turnover_usdt", 500_000)
+        await manager.load_and_validate()
+
+        assert manager.normal_symbols == ["B-BTC_USDT", "B-ETH_USDT"]
+        assert manager.momentum_symbols == ["B-BTC_USDT", "B-ETH_USDT"]
+        assert manager.whitelist_diagnostics["TONUSDT"]["status"] == "NOT_LISTED"
+
+    asyncio.run(run())
+
+
+def test_dynamic_symbol_fallback_never_adds_below_liquidity_floor_or_stablecoins(monkeypatch):
+    async def run():
+        class MultiMarketRest(FakeRest):
+            async def get_ticker(self):
+                return [
+                    {"market": "B-BTC_USDT", "base_volume": "10000", "last_price": "1000"},
+                    {"market": "B-ETH_USDT", "base_volume": "1", "last_price": "100"},
+                    {"market": "B-USDC_USDT", "base_volume": "10000000", "last_price": "1"},
+                ]
+
+        rest = MultiMarketRest([
+            {
+                "pair": f"B-{symbol}_USDT",
+                "coindcx_name": f"B-{symbol}_USDT",
+                "target_currency_short_name": symbol,
+                "base_currency_short_name": "USDT",
+                "status": "active",
+            }
+            for symbol in ("BTC", "ETH", "USDC")
+        ])
+        manager = SymbolManager(rest)
+
+        def load_yaml(path):
+            if path.endswith("normal_symbols.yaml"):
+                return ["B-TON_USDT"]
+            if path.endswith("momentum_symbols.yaml"):
+                return ["B-TON_USDT"]
+            return []
+
+        monkeypatch.setattr(manager, "_load_yaml", load_yaml)
+        monkeypatch.setattr("exchange.symbol_manager.settings.normal_symbol_limit", 2)
+        monkeypatch.setattr("exchange.symbol_manager.settings.momentum_symbol_limit", 2)
+        monkeypatch.setattr("exchange.symbol_manager.settings.normal_min_24h_turnover_usdt", 1_000_000)
+        monkeypatch.setattr("exchange.symbol_manager.settings.momentum_min_24h_turnover_usdt", 500_000)
+        await manager.load_and_validate()
+
+        assert manager.normal_symbols == ["B-BTC_USDT"]
+        assert manager.momentum_symbols == ["B-BTC_USDT"]
+        assert "B-USDC_USDT" not in manager.normal_symbols + manager.momentum_symbols
+        assert "B-ETH_USDT" not in manager.normal_symbols + manager.momentum_symbols
+
+    asyncio.run(run())
