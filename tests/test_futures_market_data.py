@@ -440,3 +440,102 @@ def test_futures_ws_candle_parser_reads_channel_from_outer_event_envelope():
     })
     assert len(builder.rows) == 1
     assert builder.rows[0][0:2] == ("B-ETH_USDT", "5m")
+
+
+@pytest.mark.parametrize("limit", [0, -1, 1001, "invalid"])
+@pytest.mark.asyncio
+async def test_futures_candle_request_rejects_invalid_limit_before_network(monkeypatch, limit):
+    client = CoinDCXRest()
+
+    async def unexpected_get(*args, **kwargs):
+        raise AssertionError("invalid candle request must not reach the exchange")
+
+    client._get = unexpected_get
+    with pytest.raises(ValueError, match="Candle limit"):
+        await client.get_candles("B-BTC_USDT", "15m", limit=limit)
+
+
+@pytest.mark.parametrize(
+    "start_time,end_time",
+    [(1_800_000_000_000, 1_799_999_999_000), (0, 1_800_000_000_000)],
+)
+@pytest.mark.asyncio
+async def test_futures_candle_request_rejects_invalid_time_range(monkeypatch, start_time, end_time):
+    client = CoinDCXRest()
+
+    async def unexpected_get(*args, **kwargs):
+        raise AssertionError("invalid candle request must not reach the exchange")
+
+    client._get = unexpected_get
+    with pytest.raises(ValueError, match="start_time"):
+        await client.get_candles(
+            "B-BTC_USDT", "5m", limit=100,
+            start_time=start_time, end_time=end_time,
+        )
+
+
+@pytest.mark.asyncio
+async def test_futures_ws_subscribes_to_configured_timeframes(monkeypatch):
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    class CandleStub:
+        def on_candle(self, *args, **kwargs):
+            pass
+
+    class SocketStub:
+        def __init__(self):
+            self.connected = False
+            self.emitted = []
+            self.handlers = {}
+        def event(self, handler):
+            self.handlers[handler.__name__] = handler
+            return handler
+        def on(self, event_name):
+            def register(handler):
+                self.handlers[event_name] = handler
+                return handler
+            return register
+        async def connect(self, url, transports=None):
+            self.connected = True
+            await self.handlers["connect"]()
+        async def emit(self, event, payload):
+            self.emitted.append((event, payload))
+        async def disconnect(self):
+            self.connected = False
+            await self.handlers["disconnect"]()
+
+    socket = SocketStub()
+    monkeypatch.setattr("exchange.coindcx_ws.socketio.AsyncClient", lambda **kwargs: socket)
+    monkeypatch.setattr("exchange.coindcx_ws.settings.enable_websocket", True)
+    monkeypatch.setattr("exchange.coindcx_ws.settings.candle_primary_tf", "1m")
+    monkeypatch.setattr("exchange.coindcx_ws.settings.candle_confirm_tf", "1h")
+    stream = CoinDCXFuturesStream(CandleStub(), CoinDCXRest())
+    assert await stream.start(["B-BTC_USDT"])
+    joined = {payload["channelName"] for event, payload in socket.emitted if event == "join"}
+    assert joined == {
+        "currentPrices@futures@rt",
+        "B-BTC_USDT_1m-futures",
+        "B-BTC_USDT_1h-futures",
+    }
+
+
+def test_futures_ws_candle_parser_infers_configured_interval_from_channel():
+    from exchange.coindcx_ws import CoinDCXFuturesStream
+
+    class CandleStub:
+        def __init__(self):
+            self.rows = []
+        def on_candle(self, pair, interval, candle):
+            self.rows.append((pair, interval, candle))
+
+    builder = CandleStub()
+    stream = CoinDCXFuturesStream(builder, CoinDCXRest())
+    stream._handle_candlestick({
+        "channel": "candlestick@B-BTC_USDT_1h-futures",
+        "data": {
+            "open_time": 1_800_000_000,
+            "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10,
+        },
+    })
+    assert len(builder.rows) == 1
+    assert builder.rows[0][0:2] == ("B-BTC_USDT", "1h")
