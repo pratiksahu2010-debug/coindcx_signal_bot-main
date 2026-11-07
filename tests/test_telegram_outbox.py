@@ -12,6 +12,7 @@ from database.repositories import (
     claim_due_signal_deliveries,
     complete_signal_delivery,
     retry_signal_delivery,
+    expire_signal_delivery,
     expire_stale_signal_deliveries,
 )
 
