@@ -1,6 +1,60 @@
 """Universal 10-point scoring system with independent engine weights."""
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
+import math
+
+
+_NUMERIC_BOUNDS = {
+    "ema9": (0.0, None), "ema21": (0.0, None),
+    "close": (0.0, None), "vwap": (0.0, None),
+    "adx": (0.0, 100.0), "rsi": (0.0, 100.0), "rsi_prev": (0.0, 100.0),
+    "rvol": (0.0, None), "atr_pct": (0.0, None),
+    "body_ratio": (0.0, 1.0), "atr_expansion": (0.0, None),
+    "close_location": (0.0, 1.0),
+    "orb_breakout_extension_atr": (0.0, None),
+    "orb_range_width_atr": (0.0, None), "roc": (None, None),
+}
+_BOOLEAN_KEYS = {
+    "di_direction_ok", "adx_rising", "confirm_15m", "structure_direction_ok",
+    "squeeze_release", "bw_expand", "ema_aligned", "macd_accel",
+    "macd_direction_ok", "rsi_accel", "structure_break",
+    "roc_direction_ok",
+}
+
+
+def _validated_indicators(indicators: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy indicator data and fail closed on malformed/non-finite values."""
+    clean = dict(indicators) if isinstance(indicators, dict) else {}
+    for key, (minimum, maximum) in _NUMERIC_BOUNDS.items():
+        raw = clean.get(key)
+        if raw is None:
+            continue
+        try:
+            if isinstance(raw, bool):
+                raise ValueError("boolean is not a numeric indicator")
+            value = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            clean[key] = None
+            continue
+        if (
+            not math.isfinite(value)
+            or (minimum is not None and value < minimum)
+            or (maximum is not None and value > maximum)
+        ):
+            clean[key] = None
+        else:
+            clean[key] = value
+
+    for key in _BOOLEAN_KEYS:
+        value = clean.get(key, False)
+        # Accept native and NumPy booleans, but never truthy strings or numbers.
+        clean[key] = value is True or type(value).__name__ == "bool_" and bool(value)
+    return clean
+
+
+def _validate_direction(direction: str) -> None:
+    if direction not in ("LONG", "SHORT"):
+        raise ValueError("direction must be LONG or SHORT")
 from utils.logger import logger
 from config import settings
 
@@ -66,6 +120,8 @@ class ScoringEngine:
     }
 
     def score_normal(self, indicators: Dict[str, Any], direction: str) -> ScoreResult:
+        _validate_direction(direction)
+        indicators = _validated_indicators(indicators)
         comps: List[ScoreComponent] = []
         w = self.NORMAL_WEIGHTS
         is_long = direction == "LONG"
@@ -209,6 +265,8 @@ class ScoringEngine:
         return ScoreResult(total=round(total, 2), components=comps, direction=direction)
 
     def score_momentum_explosion(self, indicators: Dict[str, Any], direction: str) -> ScoreResult:
+        _validate_direction(direction)
+        indicators = _validated_indicators(indicators)
         """Score an already-qualified early ignition without demanding lagging confirmation.
 
         The detector has already enforced minimum ATR expansion, RVOL, candle body,
@@ -293,6 +351,8 @@ class ScoringEngine:
         return ScoreResult(total=round(total, 2), components=components, direction=direction)
 
     def score_orb(self, indicators: Dict[str, Any], direction: str) -> ScoreResult:
+        _validate_direction(direction)
+        indicators = _validated_indicators(indicators)
         """Score ORB quality from its own range, participation and entry geometry."""
         is_long = direction == "LONG"
         components: List[ScoreComponent] = []
@@ -341,6 +401,8 @@ class ScoringEngine:
         return ScoreResult(total=total, components=components, direction=direction)
 
     def score_momentum(self, indicators: Dict[str, Any], direction: str) -> ScoreResult:
+        _validate_direction(direction)
+        indicators = _validated_indicators(indicators)
         comps: List[ScoreComponent] = []
         w = self.MOMENTUM_WEIGHTS
         is_long = direction == "LONG"
