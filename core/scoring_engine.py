@@ -414,7 +414,7 @@ class ScoringEngine:
                                     "BB outside KC / expansion" if squeeze else "Still compressed", squeeze))
 
         # ATR expansion
-        atr_exp = indicators.get("atr_expansion", 0.0)
+        atr_exp = indicators.get("atr_expansion") or 0.0
         pts = min(w["atr_expansion"], atr_exp * w["atr_expansion"]) if atr_exp > 1.1 else 0.0
         comps.append(ScoreComponent("ATR Expansion", pts, w["atr_expansion"], atr_exp, direction,
                                     f"ATR ratio {atr_exp:.2f}", pts > 0))
