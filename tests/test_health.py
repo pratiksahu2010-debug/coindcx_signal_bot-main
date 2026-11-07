@@ -347,3 +347,19 @@ async def test_health_allows_scan_startup_grace_before_first_cycle(monkeypatch):
                 delattr(app.state, "start_time")
         else:
             app.state.start_time = old_start
+
+@pytest.mark.asyncio
+async def test_metrics_includes_telegram_outbox_queue(monkeypatch):
+    from database import repositories
+
+    async def fake_queue_stats():
+        return {"pending": 2, "retry": 1, "total": 3}
+
+    monkeypatch.setattr(repositories, "signal_delivery_queue_stats", fake_queue_stats)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/metrics")
+    assert resp.status_code == 200
+    assert resp.json()["telegram_outbox_queue"] == {
+        "pending": 2, "retry": 1, "total": 3
+    }
