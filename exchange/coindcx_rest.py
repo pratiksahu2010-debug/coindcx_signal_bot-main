@@ -552,6 +552,10 @@ class CoinDCXRest:
         if not isinstance(data, list):
             if track_feed_health:
                 self._record_candle_feed_observation(pair, interval, False)
+            # Cache malformed/empty-envelope responses briefly as well. Without
+            # this, each engine can repeat the same failed REST request during
+            # one scan cycle and amplify exchange load for an unhealthy market.
+            self._candle_cache[cache_key] = (time.monotonic(), [])
             return []
         normalized = []
         for row in data:
