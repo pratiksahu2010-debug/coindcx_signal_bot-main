@@ -89,3 +89,44 @@ def test_dst_conversion_is_automatic_for_winter_dates():
     new_york = datetime(2026, 1, 5, 9, 30, tzinfo=ZoneInfo("America/New_York"))
     assert london.astimezone(timezone.utc).hour == 8
     assert new_york.astimezone(timezone.utc).hour == 14
+
+
+
+def test_orb_exposes_adx_di_confirmation_without_vetoing_early_breakout():
+    result = evaluate(
+        base_candles("london", 8, 15), 1.5, 1.8, session="london",
+        adx_value=24.0, plus_di=28.0, minus_di=14.0, adx_rising=True,
+    )
+    assert result["state"] == "ORB_BREAKOUT"
+    assert result["trend_confirmed"] is True
+    assert result["di_aligned"] is True
+    assert result["adx_rising"] is True
+
+
+def test_orb_does_not_mark_trend_confirmed_when_di_opposes_direction():
+    result = evaluate(
+        base_candles("london", 8, 15), 1.5, 1.8, session="london",
+        adx_value=26.0, plus_di=12.0, minus_di=29.0,
+    )
+    assert result["state"] == "ORB_BREAKOUT"
+    assert result["trend_confirmed"] is False
+    assert result["di_aligned"] is False
+
+
+def test_orb_detects_failed_breakout_when_close_returns_inside_range():
+    candles = base_candles("london", 8, 15)
+    candles["time"] = np.append(candles["time"], ts(2, "Europe/London", 8, 20))
+    candles["open"] = np.append(candles["open"], 101.5)
+    candles["high"] = np.append(candles["high"], 101.7)
+    candles["low"] = np.append(candles["low"], 100.8)
+    candles["close"] = np.append(candles["close"], 101.0)
+    result = evaluate(candles, 1.5, 1.8, session="london")
+    assert result["state"] == "ORB_FAILED_BREAKOUT"
+    assert result["direction"] == "LONG"
+    assert result["failed_breakout"] is True
+
+
+def test_orb_rejects_breakout_with_large_opposing_wick():
+    candles = base_candles("london", 8, 15, last_high=103.0, last_low=100.8, last_close=101.8)
+    result = evaluate(candles, 1.5, 1.8, session="london")
+    assert result["state"] == "WEAK_BREAKOUT"

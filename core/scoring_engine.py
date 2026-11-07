@@ -13,12 +13,15 @@ _NUMERIC_BOUNDS = {
     "close_location": (0.0, 1.0),
     "orb_breakout_extension_atr": (0.0, None),
     "orb_range_width_atr": (0.0, None), "roc": (None, None),
+    "plus_di": (0.0, 100.0), "minus_di": (0.0, 100.0),
+    "upper_wick_ratio": (0.0, 1.0), "lower_wick_ratio": (0.0, 1.0),
 }
 _BOOLEAN_KEYS = {
     "di_direction_ok", "adx_rising", "confirm_15m", "structure_direction_ok",
     "squeeze_release", "bw_expand", "ema_aligned", "macd_accel",
     "macd_direction_ok", "rsi_accel", "structure_break",
-    "roc_direction_ok",
+    "roc_direction_ok", "orb_trend_confirmed", "orb_di_aligned",
+    "orb_adx_rising", "orb_wick_quality",
 }
 
 
@@ -356,51 +359,66 @@ class ScoringEngine:
         return ScoreResult(total=round(total, 2), components=components, direction=direction)
 
     def score_orb(self, indicators: Dict[str, Any], direction: str) -> ScoreResult:
-        """Score ORB quality from its own range, participation and entry geometry."""
+        """Score ORB quality on a fixed 10-point scale."""
         _validate_direction(direction)
         indicators = _validated_indicators(indicators)
         is_long = direction == "LONG"
         components: List[ScoreComponent] = []
 
         rvol = float(indicators.get("rvol") or 0.0)
-        volume_points = 1.5 if rvol >= 1.8 else (1.2 if rvol >= 1.5 else 1.0)
-        components.append(ScoreComponent("ORB Volume", volume_points, 1.5, rvol,
-            direction, f"RVOL {rvol:.2f}x", True))
+        volume_points = 1.25 if rvol >= 1.8 else (1.0 if rvol >= 1.5 else 0.75)
+        components.append(ScoreComponent("ORB Volume", volume_points, 1.25, rvol,
+            direction, f"RVOL {rvol:.2f}x", rvol >= 1.30))
 
         body = float(indicators.get("body_ratio") or 0.0)
-        body_points = 1.25 if body >= 0.65 else (0.9 if body >= 0.45 else 0.5)
-        components.append(ScoreComponent("ORB Candle", body_points, 1.25, body,
-            direction, f"Body ratio {body:.2f}", body >= 0.35))
+        body_points = 1.0 if body >= 0.65 else (0.70 if body >= 0.45 else 0.0)
+        components.append(ScoreComponent("ORB Candle", body_points, 1.0, body,
+            direction, f"Body ratio {body:.2f}", body >= 0.45))
 
         raw_location = indicators.get("close_location", 0.5)
         location = float(0.5 if raw_location is None else raw_location)
         aligned_location = location if is_long else 1.0 - location
-        location_points = 1.25 if aligned_location >= 0.80 else (1.0 if aligned_location >= 0.65 else 0.5)
-        components.append(ScoreComponent("ORB Close Location", location_points, 1.25,
-            aligned_location, direction, f"Directional close location {aligned_location:.2f}", True))
+        location_points = 1.0 if aligned_location >= 0.80 else (0.75 if aligned_location >= 0.65 else 0.0)
+        components.append(ScoreComponent("ORB Close Location", location_points, 1.0,
+            aligned_location, direction, f"Directional close location {aligned_location:.2f}",
+            aligned_location >= 0.62))
 
         raw_extension = indicators.get("orb_breakout_extension_atr")
         extension = float(99.0 if raw_extension is None else raw_extension)
-        extension_points = 2.0 if extension <= 0.35 else (1.6 if extension <= 0.55 else 1.1)
-        components.append(ScoreComponent("ORB Entry Distance", extension_points, 2.0,
+        extension_points = 1.75 if extension <= 0.35 else (1.35 if extension <= 0.55 else 0.90)
+        components.append(ScoreComponent("ORB Entry Distance", extension_points, 1.75,
             extension, direction, f"Breakout extension {extension:.2f} ATR", extension <= 0.80))
 
         width = float(indicators.get("orb_range_width_atr") or 0.0)
-        width_points = 1.0 if 0.25 <= width <= 1.50 else 0.5
-        components.append(ScoreComponent("ORB Range Quality", width_points, 1.0,
+        width_points = 0.75 if 0.25 <= width <= 1.50 else (0.35 if width > 0 else 0.0)
+        components.append(ScoreComponent("ORB Range Quality", width_points, 0.75,
             width, direction, f"Opening range {width:.2f} ATR", width > 0))
 
         ema_ok = bool(indicators.get("ema_aligned"))
-        components.append(ScoreComponent("EMA Context", 1.0 if ema_ok else 0.0, 1.0,
+        components.append(ScoreComponent("EMA Context", 0.75 if ema_ok else 0.0, 0.75,
             ema_ok, direction, "EMA aligned" if ema_ok else "EMA not aligned", ema_ok))
 
         macd_ok = bool(indicators.get("macd_direction_ok"))
-        components.append(ScoreComponent("MACD Context", 1.0 if macd_ok else 0.0, 1.0,
+        components.append(ScoreComponent("MACD Context", 0.75 if macd_ok else 0.0, 0.75,
             macd_ok, direction, "MACD aligned" if macd_ok else "MACD not aligned", macd_ok))
 
         roc_ok = bool(indicators.get("roc_direction_ok"))
-        components.append(ScoreComponent("ROC Context", 1.0 if roc_ok else 0.0, 1.0,
+        components.append(ScoreComponent("ROC Context", 0.75 if roc_ok else 0.0, 0.75,
             roc_ok, direction, "ROC aligned" if roc_ok else "ROC not aligned", roc_ok))
+
+        trend_ok = bool(indicators.get("orb_trend_confirmed"))
+        adx_rising = bool(indicators.get("orb_adx_rising"))
+        trend_points = 1.0 if trend_ok and adx_rising else (0.75 if trend_ok else 0.0)
+        components.append(ScoreComponent("ADX + DI Context", trend_points, 1.0,
+            {"adx": indicators.get("adx"), "di_aligned": indicators.get("orb_di_aligned"),
+             "adx_rising": adx_rising}, direction,
+            ("ADX strong and DI aligned" + ("; ADX rising" if adx_rising else ""))
+            if trend_ok else "ADX/DI confirmation unavailable or not aligned", trend_ok))
+
+        wick_ok = bool(indicators.get("orb_wick_quality"))
+        components.append(ScoreComponent("Opposing Wick Quality", 1.0 if wick_ok else 0.0, 1.0,
+            wick_ok, direction, "Opposing wick controlled" if wick_ok else "Opposing wick too large",
+            wick_ok))
 
         total = round(sum(item.points for item in components), 2)
         return ScoreResult(total=total, components=components, direction=direction)

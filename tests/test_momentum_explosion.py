@@ -23,6 +23,8 @@ def setup(**overrides):
         "macd_direction_ok": False,
         "rsi_accel": False,
         "ema_aligned": False,
+        "upper_wick_ratio": 0.12,
+        "lower_wick_ratio": 0.12,
     }
     values.update(overrides)
     return values
@@ -147,3 +149,21 @@ def test_directional_volume_spike_is_a_valid_momentum_state():
     state = detect_momentum_state(indicators)
     assert state == "VOLUME_SPIKE"
     assert state in VALID_MOMENTUM_STATES
+
+
+
+def test_rejects_long_explosion_with_large_upper_rejection_wick():
+    assert not evaluate(setup(upper_wick_ratio=0.40))
+
+
+def test_rejects_short_explosion_with_large_lower_rejection_wick():
+    assert not evaluate(setup(direction="SHORT", close_location=0.16, lower_wick_ratio=0.40))
+
+
+@pytest.mark.parametrize("extension", [1.36, 1.50, 2.00])
+def test_rejects_overextended_momentum_entry(extension):
+    assert not evaluate(setup(ema_extension_atr=extension))
+
+
+def test_accepts_clean_directional_wick_structure():
+    assert evaluate(setup(upper_wick_ratio=0.20, lower_wick_ratio=0.08))

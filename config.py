@@ -56,6 +56,7 @@ if HAS_PYDANTIC:
         orb_london_enabled: bool = Field(default=True, alias="ORB_LONDON_ENABLED")
         orb_new_york_enabled: bool = Field(default=True, alias="ORB_NEW_YORK_ENABLED")
         orb_min_rvol: float = Field(default=1.30, alias="ORB_MIN_RVOL")
+        orb_adx_min: float = Field(default=18.0, alias="ORB_ADX_MIN")
         orb_max_extension_atr: float = Field(default=0.80, alias="ORB_MAX_EXTENSION_ATR")
         orb_active_minutes: int = Field(default=180, alias="ORB_ACTIVE_MINUTES")
 
@@ -129,6 +130,7 @@ else:
             self.orb_london_enabled = os.getenv("ORB_LONDON_ENABLED", "true").lower() == "true"
             self.orb_new_york_enabled = os.getenv("ORB_NEW_YORK_ENABLED", "true").lower() == "true"
             self.orb_min_rvol = float(os.getenv("ORB_MIN_RVOL", "1.30"))
+            self.orb_adx_min = float(os.getenv("ORB_ADX_MIN", "18.0"))
             self.orb_max_extension_atr = float(os.getenv("ORB_MAX_EXTENSION_ATR", "0.80"))
             self.orb_active_minutes = int(os.getenv("ORB_ACTIVE_MINUTES", "180"))
 
